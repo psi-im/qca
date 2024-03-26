@@ -15,7 +15,9 @@ Unfortunately it's not possible to keep development under the hood of KDE projec
     * Added a few hash algorithms like SHA3 and Blake2b
     * Added DTLS support
 
-  Currently the diff with mainstream may look like 99% rewrite mostly because of reformatting all the sources with clang-format. Which could be the main reason why this fork will never be merged back. Even without reformatting making nice feature-dedicated PRs would be quite time consuming and probably doesn't worth it.
+  Any changes from upstream are regularly merged back to this fork. So it has all the best from both worlds.
+
+  If anyone desires to split the fork into smaller changes and make pull requests to the upstream, I'll support it as much as I can.
 
 Description
 -----------
