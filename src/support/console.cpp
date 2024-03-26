@@ -25,11 +25,11 @@
 
 #include <QMutex>
 #include <QPointer>
-#if QT_VERSION < QT_VERSION_CHECK(6,0,0)
-# include <QTextCodec>
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+#include <QTextCodec>
 #else
-# include <QStringEncoder>
-# include <QStringDecoder>
+#include <QStringDecoder>
+#include <QStringEncoder>
 #endif
 
 #ifdef Q_OS_WIN
@@ -737,22 +737,22 @@ class ConsolePrompt::Private : public QObject
 public:
     ConsolePrompt *q;
 
-    Synchronizer                sync;
-    Console                    *con;
-    bool                        own_con;
-    ConsoleReference            console;
-    QString                     promptStr;
-    SecureArray                 result;
-    bool                        waiting;
-    int                         at;
-    bool                        done;
-    bool                        charMode;
-#if QT_VERSION < QT_VERSION_CHECK(6,0,0)
+    Synchronizer     sync;
+    Console         *con;
+    bool             own_con;
+    ConsoleReference console;
+    QString          promptStr;
+    SecureArray      result;
+    bool             waiting;
+    int              at;
+    bool             done;
+    bool             charMode;
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
     QTextCodec                 *codec;
     QTextCodec::ConverterState *encstate, *decstate;
 #else
-    QStringEncoder              encoder;
-    QStringDecoder              decoder;
+    QStringEncoder encoder;
+    QStringDecoder decoder;
 #endif
 
     Private(ConsolePrompt *_q)
@@ -767,22 +767,22 @@ public:
         con     = nullptr;
         own_con = false;
         waiting = false;
-#if QT_VERSION < QT_VERSION_CHECK(6,0,0)
-# ifdef Q_OS_WIN
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+#ifdef Q_OS_WIN
         codec = QTextCodec::codecForMib(106); // UTF-8
-# else
+#else
         codec = QTextCodec::codecForLocale();
-# endif
+#endif
         encstate = nullptr;
         decstate = nullptr;
 #else
-# ifdef Q_OS_WIN
+#ifdef Q_OS_WIN
         encoder = QStringEncoder(QStringEncoder::Utf8);
         decoder = QStringDecoder(QStringDecoder::Utf8);
-# else
+#else
         encoder = QStringEncoder(QStringEncoder::System);
         decoder = QStringDecoder(QStringDecoder::System);
-# endif
+#endif
 #endif
     }
 
@@ -793,7 +793,7 @@ public:
 
     void reset()
     {
-#if QT_VERSION < QT_VERSION_CHECK(6,0,0)
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
         delete encstate;
         encstate = nullptr;
         delete decstate;
@@ -824,7 +824,7 @@ public:
         at       = 0;
         done     = false;
         charMode = _charMode;
-#if QT_VERSION < QT_VERSION_CHECK(6,0,0)
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
         encstate = new QTextCodec::ConverterState(QTextCodec::IgnoreHeader);
         decstate = new QTextCodec::ConverterState(QTextCodec::IgnoreHeader);
 #endif
@@ -842,10 +842,10 @@ public:
 
     void writeString(const QString &str)
     {
-#if QT_VERSION < QT_VERSION_CHECK(6,0,0)
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
         console.writeSecure(codec->fromUnicode(str.unicode(), str.length(), encstate));
 #else
-        console.writeSecure(QByteArray{encoder(str)});
+        console.writeSecure(QByteArray {encoder(str)});
 #endif
     }
 
@@ -895,34 +895,21 @@ public:
     void convertToUtf8()
     {
         // convert result from utf16 to utf8, securely
-#if QT_VERSION < QT_VERSION_CHECK(6,0,0)
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
         QTextCodec                *codec = QTextCodec::codecForMib(106);
         QTextCodec::ConverterState cstate(QTextCodec::IgnoreHeader);
 #else
         QStringEncoder encoder(QStringConverter::Utf8);
 #endif
-        SecureArray                out;
-        const ushort              *ustr = reinterpret_cast<ushort *>(result.data());
-        const int                  len  = result.size() / sizeof(ushort);
+        SecureArray   out;
+        const ushort *ustr = reinterpret_cast<ushort *>(result.data());
+        const int     len  = result.size() / sizeof(ushort);
         for (int n = 0; n < len; ++n) {
             QChar c(ustr[n]);
-#if QT_VERSION < QT_VERSION_CHECK(6,0,0)
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
             out += codec->fromUnicode(&c, 1, &cstate);
 #else
-            if (c.isHighSurrogate()) {
-                continue;
-            }
-            // looks ugly, but we don't keep strings in insecure containers
-            if (c.isLowSurrogate()) {
-                if (!n) continue;  // ignore completely invaid surrogate
-                QChar chars[2] = {QChar{ustr[n-1]}, QChar{ustr[n]}};
-                if (!chars[0].isHighSurrogate()) continue;  // another invalid surrogate
-                QStringView view{chars, 2};
-                out += QByteArray(encoder(view));
-            } else {
-                QStringView view(&c, 1);
-                out += QByteArray(encoder(view));
-            }
+            out += QByteArray(encoder(QStringView {&c, 1}));
 #endif
         }
         result = out;
@@ -936,13 +923,13 @@ private Q_SLOTS:
             if (buf.isEmpty())
                 break;
 
-            // convert to unicode and process
-#if QT_VERSION < QT_VERSION_CHECK(6,0,0)
-            const QString str  = codec->toUnicode(buf.data(), 1, decstate);
+                // convert to unicode and process
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+            const QString str = codec->toUnicode(buf.data(), 1, decstate);
 #else
-            const QString str  = decoder(QByteArrayView(buf.data(), 1));
+            const QString str = decoder(QByteArrayView(buf.data(), 1));
 #endif
-            bool          quit = false;
+            bool quit = false;
             for (const QChar &c : str) {
                 if (!processChar(c)) {
                     quit = true;

@@ -41,8 +41,7 @@
 #include <QTextDecoder>
 #include <QTextEncoder>
 #else
-# include <QStringEncoder>
-# include <QStringDecoder>
+#include <QStringEncoder>
 #endif
 #include <QThread>
 #include <QWaitCondition>
@@ -305,7 +304,7 @@ static int pipe_read_avail_console(Q_PIPE_ID pipe)
 // pass dec to keep a long-running decoder, else 0
 static int pipe_read_console(Q_PIPE_ID pipe, ushort *data, int max, bool *eof)
 {
-    int  n, size, count;
+    int n, size, count;
 
     if (eof)
         *eof = false;
@@ -320,7 +319,7 @@ static int pipe_read_console(Q_PIPE_ID pipe, ushort *data, int max, bool *eof)
 
     size = 0;
     for (n = 0; n < count && size < max; ++n) {
-        quint16 uni     = 0;
+        quint16 uni = 0;
 
         BOOL  ret;
         DWORD i;
@@ -871,12 +870,12 @@ public:
     int               lastTaken, lastWritten;
 
 #ifdef Q_OS_WIN
-    bool          atEnd, atError, forceNotify;
-    int           readAhead;
-    SafeTimer    *readTimer;
-    bool          consoleMode;
-    QPipeWriter  *pipeWriter;
-    QPipeReader  *pipeReader;
+    bool         atEnd, atError, forceNotify;
+    int          readAhead;
+    SafeTimer   *readTimer;
+    bool         consoleMode;
+    QPipeWriter *pipeWriter;
+    QPipeReader *pipeReader;
 #endif
 #ifdef Q_OS_UNIX
     SafeSocketNotifier *sn_read, *sn_write;
@@ -915,7 +914,7 @@ public:
         delete pipeWriter;
         pipeWriter = 0;
         delete pipeReader;
-        pipeReader = 0;
+        pipeReader  = 0;
         consoleMode = false;
 #endif
 #ifdef Q_OS_UNIX
@@ -1251,33 +1250,19 @@ int QPipeDevice::read(char *data, int maxsize)
         if (ret != -1) {
             // for security, encode one character at a time without
             //   performing a QString conversion of the whole thing
-#if QT_VERSION < QT_VERSION_CHECK(6,0,0)
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
             QTextCodec                *codec = QTextCodec::codecForMib(106);
             QTextCodec::ConverterState cstate(QTextCodec::IgnoreHeader);
 #else
-            QStringEncoder  encoder(QStringEncoder::Utf8);
+            QStringEncoder encoder(QStringEncoder::Utf8);
 #endif
-            int                        at = 0;
+            int at = 0;
             for (int n = 0; n < ret; ++n) {
-                QChar      c(dest[n]);
-#if QT_VERSION < QT_VERSION_CHECK(6,0,0)
+                QChar c(dest[n]);
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
                 QByteArray out = codec->fromUnicode(&c, 1, &cstate);
 #else
-                if (c.isHighSurrogate()) {
-                    continue;
-                }
-                QByteArray out;
-                // looks ugly, but we don't keep strings in insecure containers
-                if (c.isLowSurrogate()) {
-                    if (!n) continue;  // ignore completely invaid surrogate
-                    QChar chars[2] = {QChar{dest[n-1]}, QChar{dest[n]}};
-                    if (!chars[0].isHighSurrogate()) continue;  // another invalid surrogate
-                    QStringView view{chars, 2};
-                    out += QByteArray(encoder(view));
-                } else {
-                    QStringView view(&c, 1);
-                    out += QByteArray(encoder(view));
-                }
+                QByteArray out = QByteArray(encoder(QStringView {&c, 1}));
 #endif
                 memcpy(data + offset + at, out.data(), out.size());
                 at += out.size();
