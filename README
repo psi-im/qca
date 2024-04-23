@@ -15,6 +15,10 @@ Unfortunately it's not possible to keep development under the hood of KDE projec
     * Added a few hash algorithms like SHA3 and Blake2b
     * Added DTLS support
 
+  Planned features:
+    * TLS channel binding
+    * SRTP support (see "use_srtp" in RFC5764)
+
   Any changes from upstream are regularly merged back to this fork. So it has all the best from both worlds.
 
   If anyone desires to split the fork into smaller changes and make pull requests to the upstream, Psi IM team will support this as much as possible. Feel free to join our [XMPP chat](xmpp:psi-dev@conference.jabber.ru?join).
