@@ -1,7 +1,9 @@
+find_package(PkgConfig REQUIRED)
+
 if(WITH_gcrypt_PLUGIN STREQUAL "yes")
-  find_package(LibGcrypt REQUIRED)
+  pkg_check_modules(LIBGCRYPT REQUIRED IMPORTED_TARGET libgcrypt)
 else()
-  find_package(LibGcrypt)
+  pkg_check_modules(LIBGCRYPT IMPORTED_TARGET libgcrypt)
 endif()
 
 if(LIBGCRYPT_FOUND)
