@@ -16,8 +16,13 @@ set(QCA_LIB_MINOR_VERSION "3")
 set(QCA_LIB_PATCH_VERSION "9")
 
 if(POLICY CMP0042)
-  cmake_policy(SET CMP0042 OLD)
+  if(CMAKE_VERSION LESS "4.0")
+    cmake_policy(SET CMP0042 OLD)
+  else()
+    cmake_policy(SET CMP0042 NEW)
+  endif()
 endif()
+
 
 option(BUILD_WITH_QT6 "Build with Qt 6" OFF)
 option(BUILD_TESTS "Create test" ON)
