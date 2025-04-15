@@ -1879,7 +1879,7 @@ static QStringList all_hash_types()
         list += QStringLiteral("md2");
 #endif
         list += QStringLiteral("md4");
-#ifdef OBJ_whirlpool
+#if defined(OBJ_whirlpool) && !defined(OPENSSL_NO_WHIRLPOOL)
         list += QStringLiteral("whirlpool");
 #endif
     }
@@ -2370,7 +2370,7 @@ public:
 #endif
             else if (type == QLatin1String("md4"))
                 return new opensslHashContext(EVP_md4(), this, type);
-#ifdef OBJ_whirlpool
+#if defined(OBJ_whirlpool) && !defined(OPENSSL_NO_WHIRLPOOL)
             else if (type == QLatin1String("whirlpool"))
                 return new opensslHashContext(EVP_whirlpool(), this, type);
 #endif
