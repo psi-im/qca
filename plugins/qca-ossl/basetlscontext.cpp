@@ -344,7 +344,7 @@ QStringList BaseOsslTLSContext::supportedCipherSuites(const TLS::Version &versio
             }
         }
     }
-#ifndef OPENSSL_NO_SSL3_METHOD
+#if !defined(OPENSSL_NO_SSL3_METHOD) && (OPENSSL_VERSION_NUMBER < 0x40000000L)
     else if (version == TLS::SSL_v3) {
         // Here should be used TLS_client_method() but on Fedora
         // it doesn't return any SSL ciphers.

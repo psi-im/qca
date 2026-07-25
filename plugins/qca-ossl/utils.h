@@ -31,6 +31,30 @@
 using namespace QCA;
 namespace opensslQCAPlugin {
 
+// We need this to support openssl3 (could be removed once we only support >= 4 if that ever happens)
+template<typename T> static void *our_X509V3_EXT_d2i(T *ext)
+{
+    using NonConstType = std::remove_const_t<T>;
+
+    return X509V3_EXT_d2i(const_cast<NonConstType *>(ext));
+}
+
+// We need this to support openssl1 (could be removed once we only support >= 3 if that ever happens)
+template<typename T> static int our_X509_NAME_get_index_by_NID(T *name, int nid, int lastpos)
+{
+    using NonConstType = std::remove_const_t<T>;
+
+    return X509_NAME_get_index_by_NID(const_cast<NonConstType *>(name), nid, lastpos);
+}
+
+// We need this to support openssl1 (could be removed once we only support >= 3 if that ever happens)
+template<typename T> static int our_X509_NAME_get_index_by_OBJ(T *name, const ASN1_OBJECT *obj, int lastpos)
+{
+    using NonConstType = std::remove_const_t<T>;
+
+    return X509_NAME_get_index_by_OBJ(const_cast<NonConstType *>(name), obj, lastpos);
+}
+
 int        passphrase_cb(char *buf, int size, int rwflag, void *u);
 RSA       *createFromExisting(const RSAPrivateKey &key);
 Validity   convert_verify_error(int err);

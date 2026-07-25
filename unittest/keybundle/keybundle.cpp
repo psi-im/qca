@@ -23,8 +23,9 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <QTemporaryFile>
+#include <QTest>
 #include <QtCrypto>
-#include <QtTest/QtTest>
 
 #include <memory>
 
