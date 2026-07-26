@@ -7,6 +7,14 @@ endif()
 if(SASL2_FOUND)
   enable_plugin("cyrus-sasl")
 
+  include(CheckSymbolExists)
+  include(CMakePushCheckState)
+  cmake_push_check_state(RESET)
+  set(CMAKE_REQUIRED_INCLUDES ${SASL2_INCLUDE_DIR})
+  check_symbol_exists(SASL_CHANNEL_BINDING "sasl/sasl.h" HAVE_SASL_CHANNEL_BINDING)
+  check_symbol_exists(SASL_BADBINDING "sasl/sasl.h" HAVE_SASL_BADBINDING)
+  cmake_pop_check_state()
+
   set(QCA_SASL_SOURCES qca-cyrus-sasl.cpp)
   include_directories( ${SASL2_INCLUDE_DIR} )
   add_library(qca-cyrus-sasl ${PLUGIN_TYPE} ${QCA_SASL_SOURCES})
@@ -16,6 +24,9 @@ if(SASL2_FOUND)
   endif()
 
   target_link_libraries(qca-cyrus-sasl Qt${QT_MAJOR_VERSION}::Core ${QCA_LIB_NAME} ${SASL2_LIBRARIES})
+  if(HAVE_SASL_CHANNEL_BINDING AND HAVE_SASL_BADBINDING)
+    target_compile_definitions(qca-cyrus-sasl PRIVATE HAVE_SASL_CHANNEL_BINDING)
+  endif()
 
   if(NOT DEVELOPER_MODE)
     install(TARGETS qca-cyrus-sasl

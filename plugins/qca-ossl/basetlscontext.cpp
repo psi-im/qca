@@ -141,6 +141,90 @@ QString BaseOsslTLSContext::hostName() const
     return receivedHostName;
 }
 
+QStringList BaseOsslTLSContext::channelBindingTypes() const
+{
+    QStringList types;
+    if (!ssl || mode != Active || SSL_is_init_finished(ssl) != 1)
+        return types;
+
+    const int version = SSL_version(ssl);
+#ifdef TLS1_3_VERSION
+    if (version == TLS1_3_VERSION) {
+        types += QStringLiteral("tls-exporter");
+        return types;
+    }
+#endif
+#ifdef DTLS1_3_VERSION
+    if (version == DTLS1_3_VERSION) {
+        types += QStringLiteral("tls-exporter");
+        return types;
+    }
+#endif
+
+    // RFC 7677 permits tls-unique when the extended master secret was
+    // negotiated, or when session resumption was not used.  tls-unique is
+    // not defined for TLS 1.3.
+    if (type() == QLatin1String("tls") && (SSL_get_extms_support(ssl) == 1 || SSL_session_reused(ssl) != 1)) {
+        types += QStringLiteral("tls-unique");
+    }
+
+    return types;
+}
+
+QByteArray BaseOsslTLSContext::channelBinding(const QString &type) const
+{
+    if (!ssl || mode != Active || SSL_is_init_finished(ssl) != 1)
+        return QByteArray();
+
+    if (type == QLatin1String("tls-exporter")) {
+        const int version   = SSL_version(ssl);
+        bool      supported = false;
+#ifdef TLS1_3_VERSION
+        supported = (version == TLS1_3_VERSION);
+#endif
+#ifdef DTLS1_3_VERSION
+        supported = supported || (version == DTLS1_3_VERSION);
+#endif
+        if (!supported)
+            return QByteArray();
+
+        static const char exporterLabel[] = "EXPORTER-Channel-Binding";
+        QByteArray        result(32, '\0');
+        if (SSL_export_keying_material(ssl,
+                                       reinterpret_cast<unsigned char *>(result.data()),
+                                       static_cast<size_t>(result.size()),
+                                       exporterLabel,
+                                       sizeof(exporterLabel) - 1,
+                                       nullptr,
+                                       0,
+                                       0) != 1) {
+            return QByteArray();
+        }
+        return result;
+    }
+
+    if (type == QLatin1String("tls-unique")) {
+        if (!channelBindingTypes().contains(QStringLiteral("tls-unique")))
+            return QByteArray();
+
+        // tls-unique is the first Finished message sent in the most recent
+        // handshake.  The client sends it first in a full handshake; the
+        // server sends it first in an abbreviated (resumed) handshake.
+        const bool resumed            = SSL_session_reused(ssl) == 1;
+        const bool localFinishedFirst = serv ? resumed : !resumed;
+
+        unsigned char finished[64];
+        const size_t  size = localFinishedFirst ? SSL_get_finished(ssl, finished, sizeof(finished))
+                                                : SSL_get_peer_finished(ssl, finished, sizeof(finished));
+        if (size == 0 || size > sizeof(finished))
+            return QByteArray();
+
+        return QByteArray(reinterpret_cast<const char *>(finished), static_cast<int>(size));
+    }
+
+    return QByteArray();
+}
+
 bool BaseOsslTLSContext::certificateRequested() const
 {
     // TODO

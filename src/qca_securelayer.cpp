@@ -206,7 +206,7 @@ public:
     bool connect_peerCertificateAvailable;
     bool connect_handshaken;
 
-    // persistent settings (survives ResetSessionAndData)
+    // persistent settings
     CertificateChain              localCert;
     PrivateKey                    localKey;
     CertificateCollection         trusted;
@@ -911,6 +911,41 @@ QString TLS::hostName() const
     return d->host;
 }
 
+QStringList TLS::channelBindingTypes() const
+{
+    if (!isHandshaken())
+        return QStringList();
+
+    return d->c->channelBindingTypes();
+}
+
+QByteArray TLS::channelBinding(const QString &type) const
+{
+    if (!isHandshaken() || type.isEmpty())
+        return QByteArray();
+
+    return d->c->channelBinding(type);
+}
+
+QString TLS::defaultChannelBindingType() const
+{
+    if (!isHandshaken())
+        return QString();
+
+    const QStringList types = channelBindingTypes();
+    if (version() == TLS_v1_3 || version() == DTLS_v1_3) {
+        const QString type = QStringLiteral("tls-exporter");
+        return types.contains(type) ? type : QString();
+    }
+
+    if (d->mode == TLS::Stream) {
+        const QString type = QStringLiteral("tls-unique");
+        return types.contains(type) ? type : QString();
+    }
+
+    return QString();
+}
+
 bool TLS::compressionEnabled() const
 {
     return d->tryCompress;
@@ -1299,11 +1334,15 @@ public:
     SASL        *q;
     SASLContext *c;
 
-    // persistent settings (survives ResetSessionAndData)
+    // settings that must survive the reset performed by startClient()/startServer()
     AuthFlags             auth_flags;
     int                   ssfmin, ssfmax;
     QString               ext_authid;
     int                   ext_ssf;
+    bool                  channelBindingSet;
+    QString               channelBindingType;
+    QByteArray            channelBindingData;
+    bool                  channelBindingCritical;
     bool                  localSet, remoteSet;
     SASLContext::HostPort local, remote;
     bool                  set_username, set_authzid, set_password, set_realm;
@@ -1396,15 +1435,19 @@ public:
         }
 
         if (mode >= ResetAll) {
-            auth_flags = SASL::AuthFlagsNone;
-            ssfmin     = 0;
-            ssfmax     = 0;
-            ext_authid = QString();
-            ext_ssf    = 0;
-            localSet   = false;
-            remoteSet  = false;
-            local      = SASLContext::HostPort();
-            remote     = SASLContext::HostPort();
+            auth_flags             = SASL::AuthFlagsNone;
+            ssfmin                 = 0;
+            ssfmax                 = 0;
+            ext_authid             = QString();
+            ext_ssf                = 0;
+            channelBindingSet      = false;
+            channelBindingType     = QString();
+            channelBindingData     = QByteArray();
+            channelBindingCritical = true;
+            localSet               = false;
+            remoteSet              = false;
+            local                  = SASLContext::HostPort();
+            remote                 = SASLContext::HostPort();
 
             set_username = false;
             username     = QString();
@@ -1421,6 +1464,13 @@ public:
     {
         c->setup(service, host, localSet ? &local : nullptr, remoteSet ? &remote : nullptr, ext_authid, ext_ssf);
         c->setConstraints(auth_flags, ssfmin, ssfmax);
+        if (channelBindingSet) {
+            c->setChannelBinding(channelBindingType, channelBindingData, channelBindingCritical);
+            channelBindingSet      = false;
+            channelBindingType     = QString();
+            channelBindingData     = QByteArray();
+            channelBindingCritical = true;
+        }
 
         QString     *p_username = nullptr;
         QString     *p_authzid  = nullptr;
@@ -1766,6 +1816,33 @@ void SASL::setExternalAuthId(const QString &authid)
 void SASL::setExternalSSF(int strength)
 {
     d->ext_ssf = strength;
+}
+
+bool SASL::supportsChannelBinding() const
+{
+    return d->c->supportsChannelBinding();
+}
+
+bool SASL::setChannelBinding(const QString &type, const QByteArray &data, bool critical)
+{
+    if (type.isEmpty() || data.isEmpty() || !d->c->supportsChannelBinding() ||
+        !d->c->setChannelBinding(type, data, critical)) {
+        return false;
+    }
+
+    d->channelBindingSet      = true;
+    d->channelBindingType     = type;
+    d->channelBindingData     = data;
+    d->channelBindingCritical = critical;
+    return true;
+}
+
+void SASL::clearChannelBinding()
+{
+    d->channelBindingSet      = false;
+    d->channelBindingType     = QString();
+    d->channelBindingData     = QByteArray();
+    d->channelBindingCritical = true;
 }
 
 void SASL::setLocalAddress(const QString &addr, quint16 port)

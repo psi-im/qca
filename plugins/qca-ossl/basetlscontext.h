@@ -96,6 +96,8 @@ public:
     bool                          clientHelloReceived() const override;
     bool                          serverHelloReceived() const override;
     QString                       hostName() const override;
+    QStringList                   channelBindingTypes() const override;
+    QByteArray                    channelBinding(const QString &type) const override;
     bool                          certificateRequested() const override;
     QList<CertificateInfoOrdered> issuerList() const override;
     SessionInfo                   sessionInfo() const override;

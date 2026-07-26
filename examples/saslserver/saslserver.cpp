@@ -87,6 +87,9 @@ static QString saslAuthConditionToString(QCA::SASL::AuthCondition x)
     case QCA::SASL::BadProtocol:
         s = QStringLiteral("bad SASL protocol");
         break;
+    case QCA::SASL::BadChannelBinding:
+        s = QStringLiteral("channel binding data is missing or does not match");
+        break;
     case QCA::SASL::BadAuth:
         s = QStringLiteral("authentication failed");
         break;
