@@ -15,8 +15,8 @@ Notes
 
   CMAKE_INSTALL_PREFIX - must be defined otherwise QCA will be installed
                          in Qt prefix (by default: "")
-  BUILD_TESTS - build unittests (by default: ON)
-  BUILD_TOOLS - build mozcerts and qcatool (by default: ON)
+  BUILD_TESTS - build unittests (by default: ON, OFF on Android)
+  BUILD_TOOLS - build mozcerts and qcatool (by default: ON, OFF on Android)
   QCA_SUFFIX - suffix will be used for library, qcatool binary,
                qcatool manpage and qca pkg-config file (by default: "")
   LIB_SUFFIX - library directory suffix (by default: "")
@@ -24,7 +24,7 @@ Notes
                     (by default: ${CMAKE_INSTALL_PREFIX}/lib${LIB_SUFFIX})
   BUILD_PLUGINS - list plugins to build (botan;ossl;gnupg for example).
                   Also possible values is none, auto or all
-                  (by default: "auto")
+                  (by default: "auto", "ossl" on Android)
   WITH_${PLUGIN}_PLUGIN - to build particular plugin. Can be no, yes or
                           auto (WITH_ossl_PLUGIN=auto for example)
   DEVELOPER_MODE - mode to enable features for developers. If ON
@@ -45,6 +45,22 @@ Notes
   QCA_DOC_INSTALL_DIR - for html documentation
   QCA_MAN_INSTALL_DIR - for qcatool manpage
   PKGCONFIG_INSTALL_PREFIX - path to install pkg config file
+
+Android
+-------
+
+  Android builds use the platform TrustManagerFactory as the QCA system
+  certificate store. The accepted issuer certificates are imported into QCA
+  directly in DER form; no CA bundle is copied from the build host and no Qt
+  resource file is required.
+
+  The Android defaults keep cross-builds minimal:
+
+    BUILD_TESTS=OFF
+    BUILD_TOOLS=OFF
+    BUILD_PLUGINS=ossl
+
+  All of these cache entries can still be overridden explicitly with -D.
 
 Please report problems to:
   http://bugs.kde.org

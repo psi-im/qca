@@ -50,12 +50,14 @@ SET( SOURCES
     support/syncthread.cpp
 )
 
-IF (WIN32)
-  SET( SOURCES ${SOURCES} qca_systemstore_win.cpp )
+if(ANDROID)
+  set(SOURCES ${SOURCES} qca_systemstore_android.cpp)
+elseif(WIN32)
+  set(SOURCES ${SOURCES} qca_systemstore_win.cpp)
 elseif(APPLE AND NOT IOS)
-  set( SOURCES ${SOURCES} qca_systemstore_mac.cpp)
+  set(SOURCES ${SOURCES} qca_systemstore_mac.cpp)
 else()
-  SET( SOURCES ${SOURCES} qca_systemstore_flatfile.cpp )
+  set(SOURCES ${SOURCES} qca_systemstore_flatfile.cpp)
 endif()
 
 # Support files
@@ -125,6 +127,10 @@ SET( SOURCES ${SOURCES} ${botan_SOURCES})
 
 add_library(${QCA_LIB_NAME} ${SOURCES}  ${public_HEADERS})
 target_link_libraries(${QCA_LIB_NAME} PUBLIC Qt${QT_MAJOR_VERSION}::Core)
+
+if(ANDROID AND NOT BUILD_WITH_QT6)
+  target_link_libraries(${QCA_LIB_NAME} PRIVATE Qt5::AndroidExtras)
+endif()
 
 if(WIN32)
   target_link_libraries(${QCA_LIB_NAME} PRIVATE crypt32 ws2_32)
