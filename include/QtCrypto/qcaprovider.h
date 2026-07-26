@@ -2598,6 +2598,44 @@ public:
         return QByteArray();
     }
 
+    /**
+       Returns the DTLS-SRTP protection profiles supported by this provider.
+
+       Providers that do not implement DTLS-SRTP may use the default
+       implementation, which returns an empty list.
+    */
+    virtual QStringList supportedSRTPProfiles() const
+    {
+        return QStringList();
+    }
+
+    /**
+       Configures the DTLS-SRTP protection profiles for the next session.
+
+       Providers that do not implement DTLS-SRTP may use the default
+       implementation, which ignores the setting.
+    */
+    virtual void setSRTPProfiles(const QStringList &profiles)
+    {
+        Q_UNUSED(profiles);
+    }
+
+    /**
+       Returns the DTLS-SRTP protection profile selected by the handshake.
+    */
+    virtual QString selectedSRTPProfile() const
+    {
+        return QString();
+    }
+
+    /**
+       Returns SRTP master keys and salts derived by the DTLS-SRTP handshake.
+    */
+    virtual TLS::SRTPKeyingMaterial srtpKeyingMaterial() const
+    {
+        return TLS::SRTPKeyingMaterial();
+    }
+
 Q_SIGNALS:
     /**
        Emit this when a start() or update() operation has completed.

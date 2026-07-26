@@ -2311,6 +2311,8 @@ public:
         list += QStringLiteral("certcollection");
         list += QStringLiteral("tls");
         list += QStringLiteral("dtls");
+        if (!supportedOsslSRTPProfiles().isEmpty())
+            list += QStringLiteral("dtls-srtp");
         list += QStringLiteral("cms");
         list += QStringLiteral("ca");
 

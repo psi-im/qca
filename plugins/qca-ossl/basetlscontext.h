@@ -29,6 +29,8 @@ using namespace QCA;
 
 namespace opensslQCAPlugin {
 
+QStringList supportedOsslSRTPProfiles();
+
 class BaseOsslTLSContext : public TLSContext
 {
     Q_OBJECT
@@ -57,6 +59,7 @@ public:
     PrivateKey            key;
     QString               targetHostName;
     QString               receivedHostName;
+    QStringList           srtpProfiles;
     bool                  clientHelloSeen;
     bool                  clientHelloRetryPending;
 
@@ -98,6 +101,10 @@ public:
     QString                       hostName() const override;
     QStringList                   channelBindingTypes() const override;
     QByteArray                    channelBinding(const QString &type) const override;
+    QStringList                   supportedSRTPProfiles() const override;
+    void                          setSRTPProfiles(const QStringList &profiles) override;
+    QString                       selectedSRTPProfile() const override;
+    TLS::SRTPKeyingMaterial       srtpKeyingMaterial() const override;
     bool                          certificateRequested() const override;
     QList<CertificateInfoOrdered> issuerList() const override;
     SessionInfo                   sessionInfo() const override;
