@@ -2575,6 +2575,29 @@ public:
     */
     virtual QByteArray unprocessed() = 0;
 
+    /**
+       Returns the channel binding types available for the active session.
+
+       Providers that do not implement channel binding may use the default
+       implementation, which returns an empty list.
+    */
+    virtual QStringList channelBindingTypes() const
+    {
+        return QStringList();
+    }
+
+    /**
+       Returns channel binding data for the active session.
+
+       Providers that do not implement channel binding may use the default
+       implementation, which returns an empty array.
+    */
+    virtual QByteArray channelBinding(const QString &type) const
+    {
+        Q_UNUSED(type);
+        return QByteArray();
+    }
+
 Q_SIGNALS:
     /**
        Emit this when a start() or update() operation has completed.
@@ -2889,6 +2912,29 @@ public:
        This is only valid after receiving the AuthCheck result code.
     */
     virtual QString authzid() const = 0;
+
+    /**
+       Returns true when this provider supports SASL channel binding.
+    */
+    virtual bool supportsChannelBinding() const
+    {
+        return false;
+    }
+
+    /**
+       Configure channel binding data for the next authentication.
+
+       The default implementation reports that the operation is not
+       supported, allowing providers without channel-binding support to
+       remain source compatible.
+    */
+    virtual bool setChannelBinding(const QString &type, const QByteArray &data, bool critical)
+    {
+        Q_UNUSED(type);
+        Q_UNUSED(data);
+        Q_UNUSED(critical);
+        return false;
+    }
 
 Q_SIGNALS:
     /**

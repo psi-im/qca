@@ -225,6 +225,12 @@ class saslContext : public SASLContext
     int     ssf_min, ssf_max;
     QString ext_authid;
     int     ext_ssf;
+#ifdef HAVE_SASL_CHANNEL_BINDING
+    bool                   channelBindingSet;
+    QByteArray             channelBindingName;
+    QByteArray             channelBindingData;
+    sasl_channel_binding_t channelBinding;
+#endif
 
     sasl_conn_t     *con;
     sasl_interact_t *need;
@@ -294,6 +300,12 @@ private:
         ssf_max    = 0;
         ext_authid = QLatin1String("");
         ext_ssf    = 0;
+#ifdef HAVE_SASL_CHANNEL_BINDING
+        channelBindingSet = false;
+        channelBindingName.clear();
+        channelBindingData.clear();
+        memset(&channelBinding, 0, sizeof(channelBinding));
+#endif
     }
 
     bool setsecprops()
@@ -320,6 +332,17 @@ private:
             if (r != SASL_OK)
                 return false;
         }
+
+#ifdef HAVE_SASL_CHANNEL_BINDING
+        if (channelBindingSet) {
+            channelBinding.name = channelBindingName.constData();
+            channelBinding.len  = static_cast<unsigned long>(channelBindingData.size());
+            channelBinding.data = reinterpret_cast<const unsigned char *>(channelBindingData.constData());
+            r                   = sasl_setprop(con, SASL_CHANNEL_BINDING, &channelBinding);
+            if (r != SASL_OK)
+                return false;
+        }
+#endif
 
         return true;
     }
@@ -367,6 +390,11 @@ private:
         case SASL_UNAVAIL:
             x = SASL::RemoteUnavailable;
             break;
+#ifdef HAVE_SASL_CHANNEL_BINDING
+        case SASL_BADBINDING:
+            x = SASL::BadChannelBinding;
+            break;
+#endif
 
         default:
             x = SASL::AuthFail;
@@ -438,6 +466,13 @@ private:
             }
 
             out_mech = QString::fromLatin1(m);
+#ifdef HAVE_SASL_CHANNEL_BINDING
+            if (channelBindingSet) {
+                const QString plusMechanism = out_mech + QStringLiteral("-PLUS");
+                if (result_mechlist.contains(plusMechanism, Qt::CaseInsensitive))
+                    out_mech = plusMechanism;
+            }
+#endif
             if (in_sendFirst && clientout) {
                 out_buf               = makeByteArray(clientout, clientoutlen);
                 result_haveClientInit = true;
@@ -644,6 +679,38 @@ public:
         remoteAddr = remote ? addrString(*remote) : QLatin1String("");
         ext_authid = ext_id;
         ext_ssf    = _ext_ssf;
+    }
+
+    bool supportsChannelBinding() const override
+    {
+#ifdef HAVE_SASL_CHANNEL_BINDING
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    bool setChannelBinding(const QString &type, const QByteArray &data, bool critical) override
+    {
+#ifdef HAVE_SASL_CHANNEL_BINDING
+        if (type.isEmpty() || data.isEmpty())
+            return false;
+
+        const QByteArray name = type.toLatin1();
+        if (QString::fromLatin1(name) != type)
+            return false;
+
+        channelBindingName      = name;
+        channelBindingData      = data;
+        channelBinding.critical = critical ? 1 : 0;
+        channelBindingSet       = true;
+        return true;
+#else
+        Q_UNUSED(type);
+        Q_UNUSED(data);
+        Q_UNUSED(critical);
+        return false;
+#endif
     }
 
     int ssf() const override

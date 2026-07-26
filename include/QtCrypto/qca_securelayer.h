@@ -547,6 +547,42 @@ foreach(const CertificateInfoOrdered &info, tls->issuerList())
     QString hostName() const;
 
     /**
+       Returns the channel binding types available for the established
+       TLS connection.
+
+       Channel binding data is only available after the handshake has
+       completed.  The returned names use the IANA channel-binding type
+       names, for example "tls-unique" and "tls-exporter".
+
+       \return the supported channel binding type names
+    */
+    QStringList channelBindingTypes() const;
+
+    /**
+       Returns channel binding data for the established TLS connection.
+
+       The data is only available after the handshake has completed.  An
+       empty array is returned when \a type is not supported for the
+       negotiated protocol or the current connection.
+
+       \param type the IANA channel-binding type name
+       \return the channel binding data, or an empty array if unavailable
+    */
+    QByteArray channelBinding(const QString &type) const;
+
+    /**
+       Returns the default channel binding type for SCRAM on the
+       established TLS connection.
+
+       This is "tls-exporter" for TLS 1.3 and "tls-unique" for earlier
+       TLS versions when that binding is safe and available.  An empty
+       string is returned if no default binding is available.
+
+       \return the default channel binding type name
+    */
+    QString defaultChannelBindingType() const;
+
+    /**
        Start the %TLS/SSL connection as a client
 
        Typically, you'll want to perform RFC 2818 validation on the
@@ -858,18 +894,19 @@ public:
     */
     enum AuthCondition
     {
-        AuthFail,         ///< Generic authentication failure
-        NoMechanism,      ///< No compatible/appropriate authentication mechanism
-        BadProtocol,      ///< Bad protocol or cancelled
-        BadServer,        ///< Server failed mutual authentication (client side only)
-        BadAuth,          ///< Authentication failure (server side only)
-        NoAuthzid,        ///< Authorization failure (server side only)
-        TooWeak,          ///< Mechanism too weak for this user (server side only)
-        NeedEncrypt,      ///< Encryption is needed in order to use mechanism (server side only)
-        Expired,          ///< Passphrase expired, has to be reset (server side only)
-        Disabled,         ///< Account is disabled (server side only)
-        NoUser,           ///< User not found (server side only)
-        RemoteUnavailable ///< Remote service needed for auth is gone (server side only)
+        AuthFail,          ///< Generic authentication failure
+        NoMechanism,       ///< No compatible/appropriate authentication mechanism
+        BadProtocol,       ///< Bad protocol or cancelled
+        BadServer,         ///< Server failed mutual authentication (client side only)
+        BadAuth,           ///< Authentication failure (server side only)
+        NoAuthzid,         ///< Authorization failure (server side only)
+        TooWeak,           ///< Mechanism too weak for this user (server side only)
+        NeedEncrypt,       ///< Encryption is needed in order to use mechanism (server side only)
+        Expired,           ///< Passphrase expired, has to be reset (server side only)
+        Disabled,          ///< Account is disabled (server side only)
+        NoUser,            ///< User not found (server side only)
+        RemoteUnavailable, ///< Remote service needed for auth is gone (server side only)
+        BadChannelBinding  ///< Channel binding data is missing or does not match
     };
 
     /**
@@ -1050,6 +1087,37 @@ public:
        \param strength the security strength factor of the connection
     */
     void setExternalSSF(int strength);
+
+    /**
+       Returns true if the selected SASL provider supports channel binding.
+
+       \return true when channel binding can be configured
+    */
+    bool supportsChannelBinding() const;
+
+    /**
+       Configure channel binding data for the next SASL authentication.
+
+       This function must be called before startClient() or startServer().
+       The setting is consumed by the next authentication attempt and is
+       not reused automatically.  Obtain fresh binding data from the TLS
+       connection before every new SASL authentication.
+
+       When \a critical is true, the SASL provider must not fall back to a
+       mechanism that does not use channel binding.  This is the setting to
+       use for SCRAM-*-PLUS.
+
+       \param type the IANA channel-binding type name
+       \param data the channel binding data from the secure transport
+       \param critical whether channel binding is mandatory
+       \return true if the provider accepted the setting
+    */
+    bool setChannelBinding(const QString &type, const QByteArray &data, bool critical = true);
+
+    /**
+       Clear previously configured channel binding data.
+    */
+    void clearChannelBinding();
 
     /**
        Initialise the client side of the connection

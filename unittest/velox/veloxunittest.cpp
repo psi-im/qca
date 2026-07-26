@@ -128,6 +128,11 @@ public:
         emit connectionError(message);
     }
 
+    void reportChannelBinding(const QString &type, const QByteArray &data)
+    {
+        emit channelBindingReceived(type, data);
+    }
+
 public Q_SLOTS:
     void start()
     {
@@ -171,6 +176,7 @@ Q_SIGNALS:
     void started(quint16 port);
     void failed(const QString &message);
     void serverNameReceived(const QString &hostName);
+    void channelBindingReceived(const QString &type, const QByteArray &data);
     void connectionError(const QString &message);
 
 private Q_SLOTS:
@@ -278,6 +284,13 @@ void SniConnection::tlsHostNameReceived()
 
 void SniConnection::tlsHandshaken()
 {
+    const QString    type = m_tls->defaultChannelBindingType();
+    const QByteArray data = m_tls->channelBinding(type);
+    if (type.isEmpty() || data.isEmpty()) {
+        m_server->reportConnectionError(QStringLiteral("No default TLS channel binding is available"));
+    } else {
+        m_server->reportChannelBinding(type, data);
+    }
     m_tls->continueAfterStep();
 }
 
@@ -381,6 +394,16 @@ public:
         return chain.isEmpty() ? QCA::Certificate() : chain.primary();
     }
 
+    QString channelBindingType() const
+    {
+        return m_channelBindingType;
+    }
+
+    QByteArray channelBindingData() const
+    {
+        return m_channelBindingData;
+    }
+
 private:
     void socketConnected()
     {
@@ -406,8 +429,10 @@ private:
 
     void tlsHandshaken()
     {
-        m_identityResult = m_tls->peerIdentityResult();
-        m_handshaken     = true;
+        m_identityResult     = m_tls->peerIdentityResult();
+        m_channelBindingType = m_tls->defaultChannelBindingType();
+        m_channelBindingData = m_tls->channelBinding(m_channelBindingType);
+        m_handshaken         = true;
         m_tls->continueAfterStep();
         finish(true, QString());
     }
@@ -441,6 +466,8 @@ private:
     QCA::TLS                *m_tls;
     QEventLoop              *m_waitLoop;
     QString                  m_tlsHostName;
+    QString                  m_channelBindingType;
+    QByteArray               m_channelBindingData;
     bool                     m_handshaken;
     bool                     m_done;
     QString                  m_errorString;
@@ -535,6 +562,7 @@ void VeloxUnitTest::sni()
     QFETCH(QString, hostName);
 
     QSignalSpy serverNameSpy(m_server, &LocalSniServer::serverNameReceived);
+    QSignalSpy channelBindingSpy(m_server, &LocalSniServer::channelBindingReceived);
     QSignalSpy serverErrorSpy(m_server, &LocalSniServer::connectionError);
 
     TlsTest client(m_rootCertificate);
@@ -555,6 +583,12 @@ void VeloxUnitTest::sni()
 
     QTRY_COMPARE_WITH_TIMEOUT(serverNameSpy.count(), 1, 1000);
     QCOMPARE(serverNameSpy.constFirst().constFirst().toString(), hostName);
+
+    QVERIFY(!client.channelBindingType().isEmpty());
+    QVERIFY(!client.channelBindingData().isEmpty());
+    QTRY_COMPARE_WITH_TIMEOUT(channelBindingSpy.count(), 1, 1000);
+    QCOMPARE(channelBindingSpy.constFirst().at(0).toString(), client.channelBindingType());
+    QCOMPARE(channelBindingSpy.constFirst().at(1).toByteArray(), client.channelBindingData());
     QVERIFY2(serverErrorSpy.isEmpty(),
              serverErrorSpy.isEmpty() ? "" : qPrintable(serverErrorSpy.constFirst().constFirst().toString()));
 }
