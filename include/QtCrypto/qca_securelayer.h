@@ -346,6 +346,95 @@ public:
     };
 
     /**
+       SRTP master keying material negotiated by DTLS-SRTP.
+
+       The local values are used for packets sent by this endpoint, while
+       the remote values are used for packets received from the peer.  The
+       values are SRTP master keys and master salts, suitable for passing to
+       an SRTP implementation such as libSRTP.  QCA does not itself process
+       SRTP or SRTCP packets.
+
+       \ingroup UserAPI
+    */
+    class QCA_EXPORT SRTPKeyingMaterial
+    {
+    public:
+        /**
+           Constructs an empty SRTP keying material object.
+        */
+        SRTPKeyingMaterial();
+
+        /**
+           Constructs SRTP keying material for a negotiated profile.
+
+           \param profile the canonical IANA DTLS-SRTP profile name
+           \param localMasterKey the key used for locally transmitted packets
+           \param localMasterSalt the salt used for locally transmitted packets
+           \param remoteMasterKey the key used for received packets
+           \param remoteMasterSalt the salt used for received packets
+        */
+        SRTPKeyingMaterial(const QString     &profile,
+                           const SecureArray &localMasterKey,
+                           const SecureArray &localMasterSalt,
+                           const SecureArray &remoteMasterKey,
+                           const SecureArray &remoteMasterSalt);
+
+        /**
+           Constructs a shallow copy of another keying material object.
+
+           \param from the keying material to copy
+        */
+        SRTPKeyingMaterial(const SRTPKeyingMaterial &from);
+
+        /**
+           Destroys the keying material object.
+        */
+        ~SRTPKeyingMaterial();
+
+        /**
+           Assigns another keying material object.
+
+           \param from the keying material to assign
+           \return a reference to this object
+        */
+        SRTPKeyingMaterial &operator=(const SRTPKeyingMaterial &from);
+
+        /**
+           Returns true if no DTLS-SRTP profile was negotiated.
+        */
+        bool isNull() const;
+
+        /**
+           Returns the negotiated IANA DTLS-SRTP protection profile name.
+        */
+        QString profile() const;
+
+        /**
+           Returns the SRTP master key used for locally transmitted packets.
+        */
+        SecureArray localMasterKey() const;
+
+        /**
+           Returns the SRTP master salt used for locally transmitted packets.
+        */
+        SecureArray localMasterSalt() const;
+
+        /**
+           Returns the SRTP master key used for packets received from the peer.
+        */
+        SecureArray remoteMasterKey() const;
+
+        /**
+           Returns the SRTP master salt used for packets received from the peer.
+        */
+        SecureArray remoteMasterSalt() const;
+
+    private:
+        class Private;
+        QSharedDataPointer<Private> d;
+    };
+
+    /**
         Constructor for Transport Layer Security connection
 
         This produces a Stream (normal %TLS) rather than Datagram (DTLS)
@@ -581,6 +670,44 @@ foreach(const CertificateInfoOrdered &info, tls->issuerList())
        \return the default channel binding type name
     */
     QString defaultChannelBindingType() const;
+
+    /**
+       Returns the DTLS-SRTP protection profiles supported by the provider.
+
+       Profile names are the canonical names from the IANA DTLS-SRTP
+       Protection Profiles registry.  An empty list is returned for normal
+       stream TLS or when the provider does not implement DTLS-SRTP.
+    */
+    QStringList supportedSRTPProfiles() const;
+
+    /**
+       Configures the DTLS-SRTP protection profiles to offer or accept.
+
+       Profiles are listed in descending order of preference.  This function
+       must be called before startClient() or startServer().  Passing an empty
+       list disables the DTLS-SRTP extension.
+
+       \param profiles IANA DTLS-SRTP protection profile names
+       \return true if all profiles are supported and the setting was stored
+    */
+    bool setSRTPProfiles(const QStringList &profiles);
+
+    /**
+       Returns the DTLS-SRTP protection profile selected by the handshake.
+
+       An empty string is returned before the handshake, when no profile was
+       negotiated, or for normal stream TLS.
+    */
+    QString selectedSRTPProfile() const;
+
+    /**
+       Returns the SRTP master keys and salts derived by DTLS-SRTP.
+
+       The result is null before the handshake or when no SRTP profile was
+       negotiated.  QCA negotiates and exports the keying material only; RTP
+       packet protection must be performed by a separate SRTP implementation.
+    */
+    SRTPKeyingMaterial srtpKeyingMaterial() const;
 
     /**
        Start the %TLS/SSL connection as a client

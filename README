@@ -20,9 +20,10 @@ was born.
     * Added a few hash algorithms like SHA3 and Blake2b
     * Added DTLS support
     * Added TLS channel binding
+    * SRTP support (see "use_srtp" in RFC5764)
 
   Planned features:
-    * SRTP support (see "use_srtp" in RFC5764)
+    * MS Windows SChannel plugin
 
   Any changes from upstream are regularly merged back to this fork. So it has all the best from both worlds.
 

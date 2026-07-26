@@ -153,6 +153,83 @@ bool TLSSession::isNull() const
 }
 
 //----------------------------------------------------------------------------
+// TLS::SRTPKeyingMaterial
+//----------------------------------------------------------------------------
+class TLS::SRTPKeyingMaterial::Private : public QSharedData
+{
+public:
+    QString     profile;
+    SecureArray localMasterKey;
+    SecureArray localMasterSalt;
+    SecureArray remoteMasterKey;
+    SecureArray remoteMasterSalt;
+};
+
+TLS::SRTPKeyingMaterial::SRTPKeyingMaterial()
+    : d(new Private)
+{
+}
+
+TLS::SRTPKeyingMaterial::SRTPKeyingMaterial(const QString     &profile,
+                                            const SecureArray &localMasterKey,
+                                            const SecureArray &localMasterSalt,
+                                            const SecureArray &remoteMasterKey,
+                                            const SecureArray &remoteMasterSalt)
+    : d(new Private)
+{
+    d->profile          = profile;
+    d->localMasterKey   = localMasterKey;
+    d->localMasterSalt  = localMasterSalt;
+    d->remoteMasterKey  = remoteMasterKey;
+    d->remoteMasterSalt = remoteMasterSalt;
+}
+
+TLS::SRTPKeyingMaterial::SRTPKeyingMaterial(const SRTPKeyingMaterial &from)
+    : d(from.d)
+{
+}
+
+TLS::SRTPKeyingMaterial::~SRTPKeyingMaterial()
+{
+}
+
+TLS::SRTPKeyingMaterial &TLS::SRTPKeyingMaterial::operator=(const SRTPKeyingMaterial &from)
+{
+    d = from.d;
+    return *this;
+}
+
+bool TLS::SRTPKeyingMaterial::isNull() const
+{
+    return d->profile.isEmpty();
+}
+
+QString TLS::SRTPKeyingMaterial::profile() const
+{
+    return d->profile;
+}
+
+SecureArray TLS::SRTPKeyingMaterial::localMasterKey() const
+{
+    return d->localMasterKey;
+}
+
+SecureArray TLS::SRTPKeyingMaterial::localMasterSalt() const
+{
+    return d->localMasterSalt;
+}
+
+SecureArray TLS::SRTPKeyingMaterial::remoteMasterKey() const
+{
+    return d->remoteMasterKey;
+}
+
+SecureArray TLS::SRTPKeyingMaterial::remoteMasterSalt() const
+{
+    return d->remoteMasterSalt;
+}
+
+//----------------------------------------------------------------------------
 // TLS
 //----------------------------------------------------------------------------
 class TLS::Private : public QObject
@@ -213,6 +290,7 @@ public:
     bool                          con_ssfMode;
     int                           con_minSSF, con_maxSSF;
     QStringList                   con_cipherSuites;
+    QStringList                   srtpProfiles;
     bool                          tryCompress;
     int                           packet_mtu;
     QList<CertificateInfoOrdered> issuerList;
@@ -343,8 +421,9 @@ public:
             con_minSSF       = 128;
             con_maxSSF       = -1;
             con_cipherSuites = QStringList();
-            tryCompress      = false;
-            packet_mtu       = -1;
+            srtpProfiles.clear();
+            tryCompress = false;
+            packet_mtu  = -1;
             issuerList.clear();
             session = TLSSession();
         }
@@ -364,6 +443,7 @@ public:
 
         c->setCertificate(localCert, localKey);
         c->setTrustedCertificates(trusted);
+        c->setSRTPProfiles(srtpProfiles);
         if (serverMode)
             c->setIssuerList(issuerList);
         if (!session.isNull()) {
@@ -944,6 +1024,48 @@ QString TLS::defaultChannelBindingType() const
     }
 
     return QString();
+}
+
+QStringList TLS::supportedSRTPProfiles() const
+{
+    if (d->mode != TLS::Datagram)
+        return QStringList();
+
+    return d->c->supportedSRTPProfiles();
+}
+
+bool TLS::setSRTPProfiles(const QStringList &profiles)
+{
+    if (d->mode != TLS::Datagram || d->state != TLS::Private::Inactive)
+        return false;
+
+    const QStringList supported = supportedSRTPProfiles();
+    QStringList       normalized;
+    for (const QString &profile : profiles) {
+        if (profile.isEmpty() || !supported.contains(profile))
+            return false;
+        if (!normalized.contains(profile))
+            normalized += profile;
+    }
+
+    d->srtpProfiles = normalized;
+    return true;
+}
+
+QString TLS::selectedSRTPProfile() const
+{
+    if (d->mode != TLS::Datagram || !isHandshaken())
+        return QString();
+
+    return d->c->selectedSRTPProfile();
+}
+
+TLS::SRTPKeyingMaterial TLS::srtpKeyingMaterial() const
+{
+    if (d->mode != TLS::Datagram || !isHandshaken())
+        return SRTPKeyingMaterial();
+
+    return d->c->srtpKeyingMaterial();
 }
 
 bool TLS::compressionEnabled() const

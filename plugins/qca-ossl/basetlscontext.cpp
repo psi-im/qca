@@ -30,8 +30,71 @@
 #include <QUrl>
 
 #include <openssl/err.h>
+#include <openssl/srtp.h>
+
+#include <cstring>
 
 namespace opensslQCAPlugin {
+
+namespace {
+
+struct SRTPProfileInfo
+{
+    const char   *qcaName;
+    const char   *opensslName;
+    unsigned long id;
+    int           masterKeyLength;
+    int           masterSaltLength;
+};
+
+// Public QCA names follow the IANA DTLS-SRTP registry.  OpenSSL uses
+// historical shortened names for the two RFC 5764 AES-CM profiles and a
+// prefixed name for the RFC 8723 double profiles.
+static const SRTPProfileInfo srtpProfileInfo[] = {
+    {"SRTP_AES128_CM_HMAC_SHA1_80", "SRTP_AES128_CM_SHA1_80", 0x0001, 16, 14},
+    {"SRTP_AES128_CM_HMAC_SHA1_32", "SRTP_AES128_CM_SHA1_32", 0x0002, 16, 14},
+    {"SRTP_AEAD_AES_128_GCM", "SRTP_AEAD_AES_128_GCM", 0x0007, 16, 12},
+    {"SRTP_AEAD_AES_256_GCM", "SRTP_AEAD_AES_256_GCM", 0x0008, 32, 12},
+    {"DOUBLE_AEAD_AES_128_GCM_AEAD_AES_128_GCM", "SRTP_DOUBLE_AEAD_AES_128_GCM_AEAD_AES_128_GCM", 0x0009, 32, 24},
+    {"DOUBLE_AEAD_AES_256_GCM_AEAD_AES_256_GCM", "SRTP_DOUBLE_AEAD_AES_256_GCM_AEAD_AES_256_GCM", 0x000a, 64, 24},
+    {"SRTP_ARIA_128_CTR_HMAC_SHA1_80", "SRTP_ARIA_128_CTR_HMAC_SHA1_80", 0x000b, 16, 14},
+    {"SRTP_ARIA_128_CTR_HMAC_SHA1_32", "SRTP_ARIA_128_CTR_HMAC_SHA1_32", 0x000c, 16, 14},
+    {"SRTP_ARIA_256_CTR_HMAC_SHA1_80", "SRTP_ARIA_256_CTR_HMAC_SHA1_80", 0x000d, 32, 14},
+    {"SRTP_ARIA_256_CTR_HMAC_SHA1_32", "SRTP_ARIA_256_CTR_HMAC_SHA1_32", 0x000e, 32, 14},
+    {"SRTP_AEAD_ARIA_128_GCM", "SRTP_AEAD_ARIA_128_GCM", 0x000f, 16, 12},
+    {"SRTP_AEAD_ARIA_256_GCM", "SRTP_AEAD_ARIA_256_GCM", 0x0010, 32, 12},
+};
+
+const SRTPProfileInfo *srtpProfileByQCAName(const QString &name)
+{
+    for (const SRTPProfileInfo &profile : srtpProfileInfo) {
+        if (name == QLatin1String(profile.qcaName))
+            return &profile;
+    }
+    return nullptr;
+}
+
+const SRTPProfileInfo *srtpProfileById(unsigned long id)
+{
+    for (const SRTPProfileInfo &profile : srtpProfileInfo) {
+        if (profile.id == id)
+            return &profile;
+    }
+    return nullptr;
+}
+
+SecureArray secureSlice(const SecureArray &source, int offset, int length)
+{
+    if (offset < 0 || length < 0 || offset + length > source.size())
+        return SecureArray();
+
+    SecureArray result(length);
+    if (length > 0)
+        std::memcpy(result.data(), source.constData() + offset, static_cast<size_t>(length));
+    return result;
+}
+
+} // namespace
 
 BaseOsslTLSContext::BaseOsslTLSContext(Provider *p, const QString &type)
     : TLSContext(p, type)
@@ -225,6 +288,114 @@ QByteArray BaseOsslTLSContext::channelBinding(const QString &type) const
     return QByteArray();
 }
 
+QStringList supportedOsslSRTPProfiles()
+{
+    static const QStringList profiles = []() {
+        QStringList result;
+#if !defined(OPENSSL_NO_SRTP)
+        for (const SRTPProfileInfo &profile : srtpProfileInfo) {
+            SSL_CTX *testContext = SSL_CTX_new(DTLS_method());
+            if (!testContext)
+                break;
+
+            const int setResult = SSL_CTX_set_tlsext_use_srtp(testContext, profile.opensslName);
+            SSL_CTX_free(testContext);
+            ERR_clear_error();
+
+            if (setResult == 0)
+                result += QLatin1String(profile.qcaName);
+        }
+#endif
+        return result;
+    }();
+
+    return profiles;
+}
+
+QStringList BaseOsslTLSContext::supportedSRTPProfiles() const
+{
+    if (type() != QLatin1String("dtls"))
+        return QStringList();
+
+    return supportedOsslSRTPProfiles();
+}
+
+void BaseOsslTLSContext::setSRTPProfiles(const QStringList &profiles)
+{
+    srtpProfiles = profiles;
+}
+
+QString BaseOsslTLSContext::selectedSRTPProfile() const
+{
+#if !defined(OPENSSL_NO_SRTP)
+    if (!ssl || mode != Active || type() != QLatin1String("dtls") || SSL_is_init_finished(ssl) != 1)
+        return QString();
+
+    const SRTP_PROTECTION_PROFILE *selected = SSL_get_selected_srtp_profile(ssl);
+    if (!selected)
+        return QString();
+
+    const SRTPProfileInfo *profile = srtpProfileById(selected->id);
+    return profile ? QLatin1String(profile->qcaName) : QString();
+#else
+    return QString();
+#endif
+}
+
+TLS::SRTPKeyingMaterial BaseOsslTLSContext::srtpKeyingMaterial() const
+{
+#if !defined(OPENSSL_NO_SRTP)
+    if (!ssl || mode != Active || type() != QLatin1String("dtls") || SSL_is_init_finished(ssl) != 1)
+        return TLS::SRTPKeyingMaterial();
+
+    const SRTP_PROTECTION_PROFILE *selected = SSL_get_selected_srtp_profile(ssl);
+    if (!selected)
+        return TLS::SRTPKeyingMaterial();
+
+    const SRTPProfileInfo *profile = srtpProfileById(selected->id);
+    if (!profile)
+        return TLS::SRTPKeyingMaterial();
+
+    const int halfLength  = profile->masterKeyLength + profile->masterSaltLength;
+    const int totalLength = 2 * halfLength;
+    if (totalLength <= 0)
+        return TLS::SRTPKeyingMaterial();
+
+    SecureArray       material(totalLength);
+    static const char exporterLabel[] = "EXTRACTOR-dtls_srtp";
+    if (SSL_export_keying_material(ssl,
+                                   reinterpret_cast<unsigned char *>(material.data()),
+                                   static_cast<size_t>(material.size()),
+                                   exporterLabel,
+                                   sizeof(exporterLabel) - 1,
+                                   nullptr,
+                                   0,
+                                   0) != 1) {
+        return TLS::SRTPKeyingMaterial();
+    }
+
+    int               offset          = 0;
+    const SecureArray clientMasterKey = secureSlice(material, offset, profile->masterKeyLength);
+    offset += profile->masterKeyLength;
+    const SecureArray serverMasterKey = secureSlice(material, offset, profile->masterKeyLength);
+    offset += profile->masterKeyLength;
+    const SecureArray clientMasterSalt = secureSlice(material, offset, profile->masterSaltLength);
+    offset += profile->masterSaltLength;
+    const SecureArray serverMasterSalt = secureSlice(material, offset, profile->masterSaltLength);
+    material.clear();
+
+    if (serv) {
+        return TLS::SRTPKeyingMaterial(
+            QLatin1String(profile->qcaName), serverMasterKey, serverMasterSalt, clientMasterKey, clientMasterSalt);
+    }
+
+    return TLS::SRTPKeyingMaterial(
+        QLatin1String(profile->qcaName), clientMasterKey, clientMasterSalt, serverMasterKey, serverMasterSalt);
+#else
+    return TLS::SRTPKeyingMaterial();
+#endif
+}
+
 bool BaseOsslTLSContext::certificateRequested() const
 {
     // TODO
@@ -390,6 +561,7 @@ void BaseOsslTLSContext::reset()
 
     targetHostName.clear();
     receivedHostName.clear();
+    srtpProfiles.clear();
     clientHelloSeen         = false;
     clientHelloRetryPending = false;
 
@@ -665,6 +837,42 @@ bool BaseOsslTLSContext::init()
         SSL_CTX_set_client_hello_cb(context, &BaseOsslTLSContext::ssl_client_hello_callback, this);
         SSL_CTX_set_tlsext_servername_callback(context, &BaseOsslTLSContext::ssl_servername_callback);
         SSL_CTX_set_tlsext_servername_arg(context, this);
+    }
+#endif
+
+#if !defined(OPENSSL_NO_SRTP)
+    if (!srtpProfiles.isEmpty()) {
+        if (type() != QLatin1String("dtls")) {
+            SSL_CTX_free(context);
+            context = nullptr;
+            return false;
+        }
+
+        QByteArray profileList;
+        for (const QString &name : srtpProfiles) {
+            const SRTPProfileInfo *profile = srtpProfileByQCAName(name);
+            if (!profile) {
+                SSL_CTX_free(context);
+                context = nullptr;
+                return false;
+            }
+            if (!profileList.isEmpty())
+                profileList += ':';
+            profileList += profile->opensslName;
+        }
+
+        if (SSL_CTX_set_tlsext_use_srtp(context, profileList.constData()) != 0) {
+            ERR_print_errors_cb(&BaseOsslTLSContext::ssl_error_callback, this);
+            SSL_CTX_free(context);
+            context = nullptr;
+            return false;
+        }
+    }
+#else
+    if (!srtpProfiles.isEmpty()) {
+        SSL_CTX_free(context);
+        context = nullptr;
+        return false;
     }
 #endif
 
