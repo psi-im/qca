@@ -43,7 +43,7 @@ void FileWatchUnitTest::cleanupTestCase()
 
 void FileWatchUnitTest::filewatchTest()
 {
-    QWARN("Unittest will take about 10 seconds. Please wait.");
+    qWarning("Unittest will take about 10 seconds. Please wait.");
 
     QCA::FileWatch watcher;
     QCOMPARE(watcher.fileName(), QString());

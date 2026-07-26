@@ -96,7 +96,7 @@ void MACUnitTest::HMACMD5()
 {
     foreach (const QString provider, m_providersToTest) {
         if (!QCA::isSupported("hmac(md5)", provider))
-            QWARN((QStringLiteral("HMAC(MD5) not supported for ") + provider).toLocal8Bit().constData());
+            qWarning("HMAC(MD5) not supported for %s", provider.toLocal8Bit().constData());
         else {
             QCA::MessageAuthenticationCode md5hmacLenTest(QStringLiteral("hmac(md5)"), QCA::SymmetricKey(), provider);
             QCOMPARE(md5hmacLenTest.validKeyLength(0), true);
@@ -177,7 +177,7 @@ void MACUnitTest::HMACSHA256()
 {
     foreach (const QString provider, m_providersToTest) {
         if (!QCA::isSupported("hmac(sha256)", provider))
-            QWARN((QStringLiteral("HMAC(SHA256) not supported for ") + provider).toLocal8Bit().constData());
+            qWarning("HMAC(SHA256) not supported for %s", provider.toLocal8Bit().constData());
         else {
             QCA::MessageAuthenticationCode hmacLenTest(QStringLiteral("hmac(sha256)"), QCA::SymmetricKey(), provider);
             QCOMPARE(hmacLenTest.validKeyLength(0), true);
@@ -259,7 +259,7 @@ void MACUnitTest::HMACSHA224()
 {
     foreach (const QString provider, m_providersToTest) {
         if (!QCA::isSupported("hmac(sha224)", provider))
-            QWARN((QStringLiteral("HMAC(SHA224) not supported for ") + provider).toLocal8Bit().constData());
+            qWarning("HMAC(SHA224) not supported for %s", provider.toLocal8Bit().constData());
         else {
             QCA::MessageAuthenticationCode hmacLenTest(QStringLiteral("hmac(sha224)"), QCA::SymmetricKey(), provider);
             QCOMPARE(hmacLenTest.validKeyLength(0), true);
@@ -341,7 +341,7 @@ void MACUnitTest::HMACSHA384()
 {
     foreach (const QString provider, m_providersToTest) {
         if (!QCA::isSupported("hmac(sha384)", provider))
-            QWARN((QStringLiteral("HMAC(SHA384) not supported for ") + provider).toLocal8Bit().constData());
+            qWarning("HMAC(SHA384) not supported for %s", provider.toLocal8Bit().constData());
         else {
             QCA::MessageAuthenticationCode hmacLenTest(QStringLiteral("hmac(sha384)"), QCA::SymmetricKey(), provider);
             QCOMPARE(hmacLenTest.validKeyLength(0), true);
@@ -429,7 +429,7 @@ void MACUnitTest::HMACSHA512()
 {
     foreach (const QString provider, m_providersToTest) {
         if (!QCA::isSupported("hmac(sha512)", provider))
-            QWARN((QStringLiteral("HMAC(SHA512) not supported for ") + provider).toLocal8Bit().constData());
+            qWarning("HMAC(SHA512) not supported for %s", provider.toLocal8Bit().constData());
         else {
             QCA::MessageAuthenticationCode hmacLenTest(QStringLiteral("hmac(sha512)"), QCA::SymmetricKey(), provider);
             QCOMPARE(hmacLenTest.validKeyLength(0), true);
@@ -517,7 +517,7 @@ void MACUnitTest::HMACSHA1()
 {
     foreach (const QString provider, m_providersToTest) {
         if (!QCA::isSupported("hmac(sha1)", provider))
-            QWARN((QStringLiteral("HMAC(SHA1) not supported for ") + provider).toLocal8Bit().constData());
+            qWarning("HMAC(SHA1) not supported for %s", provider.toLocal8Bit().constData());
         else {
             QCA::MessageAuthenticationCode sha1hmacLenTest(QStringLiteral("hmac(sha1)"), QCA::SymmetricKey(), provider);
             QCOMPARE(sha1hmacLenTest.validKeyLength(0), true);
@@ -597,7 +597,7 @@ void MACUnitTest::HMACRMD160()
 {
     foreach (const QString provider, m_providersToTest) {
         if (!QCA::isSupported("hmac(ripemd160)", provider))
-            QWARN((QStringLiteral("HMAC(RIPEMD160) not supported for ") + provider).toLocal8Bit().constData());
+            qWarning("HMAC(RIPEMD160) not supported for %s", provider.toLocal8Bit().constData());
         else {
             QCA::MessageAuthenticationCode ripemd160hmacLenTest(
                 QStringLiteral("hmac(ripemd160)"), QCA::SymmetricKey(), provider);

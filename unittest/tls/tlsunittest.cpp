@@ -58,7 +58,7 @@ void TLSUnitTest::cleanupTestCase()
 void TLSUnitTest::testCipherList()
 {
     if (!QCA::isSupported("tls", QStringLiteral("qca-ossl")))
-        QWARN("TLS not supported for qca-ossl");
+        qWarning("TLS not supported for qca-ossl");
     else {
         std::unique_ptr<QCA::TLS> tls(new QCA::TLS(QCA::TLS::Stream, nullptr, QStringLiteral("qca-ossl")));
 

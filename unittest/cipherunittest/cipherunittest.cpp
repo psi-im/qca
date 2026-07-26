@@ -2616,7 +2616,7 @@ void CipherUnitTest::des_cbc_pkcs7()
 
 #if 0
 if (!QCA::isSupported("des-ecb-pkcs7") )
-QWARN("DES, ECB mode with PKCS7 padding not supported!");
+qWarning("DES, ECB mode with PKCS7 padding not supported!");
 else {
 QCA::Cipher cipherObj1( QStringLiteral( "des" ),
                         QCA::Cipher::ECB,

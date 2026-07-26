@@ -1,19 +1,25 @@
 # QCA OSSL
 
+include(QcaOpenSSL)
+
 if(WITH_ossl_PLUGIN STREQUAL "yes")
-  find_package(OpenSSL 1.1.1 REQUIRED)
+  qca_find_openssl(REQUIRED)
 else()
-  find_package(OpenSSL 1.1.1)
+  qca_find_openssl()
 endif()
 
-if(OPENSSL_FOUND)
+if(TARGET OpenSSL::SSL AND TARGET OpenSSL::Crypto)
   enable_plugin("ossl")
 
   include(CheckSymbolExists)
   include(CMakePushCheckState)
 
   cmake_push_check_state(RESET)
-  set(CMAKE_REQUIRED_INCLUDES "${OPENSSL_INCLUDE_DIR}")
+  get_target_property(_qca_openssl_include_dirs
+                      OpenSSL::Crypto INTERFACE_INCLUDE_DIRECTORIES)
+  if(_qca_openssl_include_dirs)
+    set(CMAKE_REQUIRED_INCLUDES "${_qca_openssl_include_dirs}")
+  endif()
   set(CMAKE_REQUIRED_LIBRARIES OpenSSL::Crypto)
 
   macro(openssl_evp_detect symbol feature)

@@ -108,7 +108,7 @@ BaseOsslTLSContext::BaseOsslTLSContext(Provider *p, const QString &type)
 
 BaseOsslTLSContext::~BaseOsslTLSContext()
 {
-    reset();
+    // usually implementation should call reset() in its destructor
 }
 
 Provider::Context *BaseOsslTLSContext::clone() const

@@ -31,6 +31,11 @@ OsslTLSContext::OsslTLSContext(Provider *p)
 {
 }
 
+OsslTLSContext::~OsslTLSContext()
+{
+    reset();
+}
+
 void OsslTLSContext::reset()
 {
     BaseOsslTLSContext::reset();

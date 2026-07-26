@@ -34,27 +34,13 @@ namespace QCA {
 static bool can_lock()
 {
 #ifdef Q_OS_UNIX
-    bool ok = false;
-#ifdef MLOCK_NOT_VOID_PTR
-#define MLOCK_TYPE char *
-#define MLOCK_TYPE_CAST (MLOCK_TYPE)
-#else
-#define MLOCK_TYPE void *
-#define MLOCK_TYPE_CAST
-#endif
+    std::array<char, 256> data {};
 
-    MLOCK_TYPE d = MLOCK_TYPE_CAST malloc(256);
-    if (d == nullptr)
-        abort();
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
-    if (mlock(d, 256) == 0) {
-        munlock(d, 256);
-        ok = true;
-    }
-#pragma GCC diagnostic pop
-    free(d);
-    return ok;
+    if (::mlock(data.data(), data.size()) != 0)
+        return false;
+
+    ::munlock(data.data(), data.size());
+    return true;
 #else
     return true;
 #endif
