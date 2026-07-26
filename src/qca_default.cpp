@@ -22,9 +22,7 @@
 #include "qca_core.h"
 
 #include <QMutex>
-#if QT_VERSION >= QT_VERSION_CHECK(5, 10, 0)
 #include <QRandomGenerator>
-#endif
 
 #include "qca_cert.h"
 #include "qca_textfilter.h"
@@ -113,11 +111,7 @@ public:
     {
         SecureArray buf(size);
         for (int n = 0; n < (int)buf.size(); ++n)
-#if QT_VERSION >= QT_VERSION_CHECK(5, 10, 0)
             buf[n] = (char)QRandomGenerator::global()->generate();
-#else
-            buf[n] = (char)std::rand();
-#endif
         return buf;
     }
 };
@@ -1195,18 +1189,6 @@ class DefaultProvider : public Provider
 {
 public:
     DefaultShared shared;
-
-    void init() override
-    {
-#if QT_VERSION < QT_VERSION_CHECK(5, 10, 0)
-        const QDateTime now = QDateTime::currentDateTime();
-
-        uint t = now.toSecsSinceEpoch();
-        if (now.time().msec() > 0)
-            t /= now.time().msec();
-        std::srand(t);
-#endif
-    }
 
     int version() const override
     {

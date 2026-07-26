@@ -1,9 +1,11 @@
-This test is intended to verify the subject hostname indication
-extension (see RFC3546 Section 3.1).
+This test verifies TLS Server Name Indication (SNI) without using the
+public network.
 
-It requires network access, and contacts a public test server
-(sni.velox.ch).
+The test starts a QCA-based TLS server on the IPv4 loopback interface and
+connects to it using several logical TLS host names.  The server selects a
+different certificate after QCA::TLS::hostNameReceived() for every host.
+The client verifies the selected certificate against the local test CA.
 
-Note that this test requires a suitable backend (plugin). If
-you are running this test with OpenSSL 0.9.8 or earlier, then
-you can expect it to fail.
+The certificates and private keys in certs/ are test fixtures only.  They
+are valid from 2020 through 2120 and must never be used outside the test
+suite.

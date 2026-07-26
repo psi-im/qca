@@ -50,6 +50,8 @@ if(OPENSSL_FOUND)
       pkeycontext.h
       utils.cpp
       utils.h
+      keyutils.cpp
+      keyutils.h
       rsakey.cpp
       rsakey.h
       dsakey.cpp

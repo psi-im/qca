@@ -21,9 +21,170 @@
  */
 
 #include "dhkey.h"
+#include "keyutils.h"
 #include "utils.h"
 
+#include <limits>
+#include <memory>
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+#include <openssl/core_names.h>
+#endif
+
 namespace opensslQCAPlugin {
+
+namespace {
+static EVP_PKEY *dhFromBignums(const BIGNUM *p, const BIGNUM *g, const BIGNUM *y, const BIGNUM *x)
+{
+    if (!p || !g || !y)
+        return nullptr;
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    if (x) {
+        return pkeyFromBnParameters("DH",
+                                    EVP_PKEY_KEYPAIR,
+                                    {{OSSL_PKEY_PARAM_FFC_P, p},
+                                     {OSSL_PKEY_PARAM_FFC_G, g},
+                                     {OSSL_PKEY_PARAM_PUB_KEY, y},
+                                     {OSSL_PKEY_PARAM_PRIV_KEY, x}});
+    }
+
+    return pkeyFromBnParameters("DH",
+                                EVP_PKEY_PUBLIC_KEY,
+                                {{OSSL_PKEY_PARAM_FFC_P, p}, {OSSL_PKEY_PARAM_FFC_G, g}, {OSSL_PKEY_PARAM_PUB_KEY, y}});
+#else
+    struct DhDeleter
+    {
+        void operator()(DH *pointer) const
+        {
+            DH_free(pointer);
+        }
+    };
+
+    std::unique_ptr<DH, DhDeleter> dh(DH_new());
+    BnPtr                          pCopy(BN_dup(p));
+    BnPtr                          gCopy(BN_dup(g));
+    BnPtr                          yCopy(BN_dup(y));
+    BnClearPtr                     xCopy(x ? BN_dup(x) : nullptr);
+
+    if (!dh || !pCopy || !gCopy || !yCopy || (x && !xCopy))
+        return nullptr;
+
+    if (DH_set0_pqg(dh.get(), pCopy.get(), nullptr, gCopy.get()) != 1)
+        return nullptr;
+
+    pCopy.release();
+    gCopy.release();
+
+    if (DH_set0_key(dh.get(), yCopy.get(), xCopy.get()) != 1)
+        return nullptr;
+
+    yCopy.release();
+    if (x)
+        xCopy.release();
+
+    EVP_PKEY *result = EVP_PKEY_new();
+    if (!result)
+        return nullptr;
+
+    if (EVP_PKEY_assign_DH(result, dh.get()) != 1) {
+        EVP_PKEY_free(result);
+        return nullptr;
+    }
+
+    dh.release();
+    return result;
+#endif
+}
+
+static EVP_PKEY *dhFromParameters(const DLGroup &domain, const BigInteger &y, const BigInteger *x)
+{
+    BnPtr      p(bi2bn(domain.p()));
+    BnPtr      g(bi2bn(domain.g()));
+    BnPtr      publicKey(bi2bn(y));
+    BnClearPtr privateKey(x ? bi2bn(*x) : nullptr);
+
+    if (!p || !g || !publicKey || (x && !privateKey))
+        return nullptr;
+
+    if (privateKey)
+        BN_set_flags(privateKey.get(), BN_FLG_CONSTTIME);
+
+    return dhFromBignums(p.get(), g.get(), publicKey.get(), privateKey.get());
+}
+
+static EVP_PKEY *dhPublicKey(const DLGroup &domain, const BigInteger &y)
+{
+    return dhFromParameters(domain, y, nullptr);
+}
+
+static EVP_PKEY *dhPrivateKey(const DLGroup &domain, const BigInteger &y, const BigInteger &x)
+{
+    return dhFromParameters(domain, y, &x);
+}
+
+static EVP_PKEY *generateDhKey(const DLGroup &domain)
+{
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    BnPtr p(bi2bn(domain.p()));
+    BnPtr g(bi2bn(domain.g()));
+    if (!p || !g)
+        return nullptr;
+
+    PkeyPtr parameters(pkeyFromBnParameters(
+        "DH", EVP_PKEY_KEY_PARAMETERS, {{OSSL_PKEY_PARAM_FFC_P, p.get()}, {OSSL_PKEY_PARAM_FFC_G, g.get()}}));
+    if (!parameters)
+        return nullptr;
+
+    PkeyCtxPtr context(newPkeyContext(parameters.get()));
+    if (!context || EVP_PKEY_keygen_init(context.get()) <= 0)
+        return nullptr;
+
+    EVP_PKEY *result = nullptr;
+    if (EVP_PKEY_keygen(context.get(), &result) <= 0) {
+        EVP_PKEY_free(result);
+        return nullptr;
+    }
+
+    return result;
+#else
+    struct DhDeleter
+    {
+        void operator()(DH *pointer) const
+        {
+            DH_free(pointer);
+        }
+    };
+
+    std::unique_ptr<DH, DhDeleter> dh(DH_new());
+    BnPtr                          p(bi2bn(domain.p()));
+    BnPtr                          g(bi2bn(domain.g()));
+    if (!dh || !p || !g)
+        return nullptr;
+
+    if (DH_set0_pqg(dh.get(), p.get(), nullptr, g.get()) != 1)
+        return nullptr;
+
+    p.release();
+    g.release();
+
+    if (DH_generate_key(dh.get()) != 1)
+        return nullptr;
+
+    EVP_PKEY *result = EVP_PKEY_new();
+    if (!result)
+        return nullptr;
+
+    if (EVP_PKEY_assign_DH(result, dh.get()) != 1) {
+        EVP_PKEY_free(result);
+        return nullptr;
+    }
+
+    dh.release();
+    return result;
+#endif
+}
+} // namespace
 
 //----------------------------------------------------------------------------
 // DHKey
@@ -32,8 +193,8 @@ class DHKeyMaker : public QThread
 {
     Q_OBJECT
 public:
-    DLGroup domain;
-    DH     *result;
+    DLGroup   domain;
+    EVP_PKEY *result;
 
     DHKeyMaker(const DLGroup &_domain, QObject *parent = nullptr)
         : QThread(parent)
@@ -45,27 +206,19 @@ public:
     ~DHKeyMaker() override
     {
         wait();
-        if (result)
-            DH_free(result);
+        EVP_PKEY_free(result);
     }
 
     void run() override
     {
-        DH     *dh  = DH_new();
-        BIGNUM *bnp = bi2bn(domain.p());
-        BIGNUM *bng = bi2bn(domain.g());
-        if (!DH_set0_pqg(dh, bnp, nullptr, bng) || !DH_generate_key(dh)) {
-            DH_free(dh);
-            return;
-        }
-        result = dh;
+        result = generateDhKey(domain);
     }
 
-    DH *takeResult()
+    EVP_PKEY *takeResult()
     {
-        DH *dh = result;
-        result = nullptr;
-        return dh;
+        EVP_PKEY *pkey = result;
+        result         = nullptr;
+        return pkey;
     }
 };
 
@@ -96,7 +249,7 @@ Provider::Context *DHKey::clone() const
 
 bool DHKey::isNull() const
 {
-    return (evp.pkey ? false : true);
+    return !evp.pkey;
 }
 
 PKey::Type DHKey::type() const
@@ -119,20 +272,13 @@ void DHKey::convertToPublic()
     if (!sec)
         return;
 
-    const DH     *orig = EVP_PKEY_get0_DH(evp.pkey);
-    DH           *dh   = DH_new();
-    const BIGNUM *bnp, *bng, *bnpub_key;
-    DH_get0_pqg(orig, &bnp, nullptr, &bng);
-    DH_get0_key(orig, &bnpub_key, nullptr);
-
-    DH_set0_key(dh, BN_dup(bnpub_key), nullptr);
-    DH_set0_pqg(dh, BN_dup(bnp), nullptr, BN_dup(bng));
+    EVP_PKEY *publicKey = dhPublicKey(domain(), y());
+    if (!publicKey)
+        return;
 
     evp.reset();
-
-    evp.pkey = EVP_PKEY_new();
-    EVP_PKEY_assign_DH(evp.pkey, dh);
-    sec = false;
+    evp.pkey = publicKey;
+    sec      = false;
 }
 
 int DHKey::bits() const
@@ -142,22 +288,33 @@ int DHKey::bits() const
 
 SymmetricKey DHKey::deriveKey(const PKeyBase &theirs)
 {
-    const DH     *dh   = EVP_PKEY_get0_DH(evp.pkey);
-    const DH     *them = EVP_PKEY_get0_DH(static_cast<const DHKey *>(&theirs)->evp.pkey);
-    const BIGNUM *bnpub_key;
-    DH_get0_key(them, &bnpub_key, nullptr);
+    const auto *peer = static_cast<const DHKey *>(&theirs);
+    if (!evp.pkey || !peer->evp.pkey)
+        return {};
 
-    SecureArray result(DH_size(dh));
-    int         ret = DH_compute_key((unsigned char *)result.data(), bnpub_key, (DH *)dh);
-    if (ret <= 0)
-        return SymmetricKey();
-    result.resize(ret);
+    PkeyCtxPtr context(newPkeyContext(evp.pkey));
+    if (!context || EVP_PKEY_derive_init(context.get()) <= 0 ||
+        EVP_PKEY_derive_set_peer(context.get(), peer->evp.pkey) <= 0)
+        return {};
+
+    size_t outputSize = 0;
+    if (EVP_PKEY_derive(context.get(), nullptr, &outputSize) <= 0 || outputSize == 0 ||
+        outputSize > static_cast<size_t>(std::numeric_limits<int>::max()))
+        return {};
+
+    SecureArray result(static_cast<int>(outputSize));
+    if (EVP_PKEY_derive(context.get(), reinterpret_cast<unsigned char *>(result.data()), &outputSize) <= 0 ||
+        outputSize > static_cast<size_t>(result.size()))
+        return {};
+
+    result.resize(static_cast<int>(outputSize));
     return SymmetricKey(result);
 }
 
 void DHKey::createPrivate(const DLGroup &domain, bool block)
 {
     evp.reset();
+    sec = false;
 
     keymaker    = new DHKeyMaker(domain, !block ? this : nullptr);
     wasBlocking = block;
@@ -173,85 +330,76 @@ void DHKey::createPrivate(const DLGroup &domain, bool block)
 void DHKey::createPrivate(const DLGroup &domain, const BigInteger &y, const BigInteger &x)
 {
     evp.reset();
+    sec = false;
 
-    DH     *dh         = DH_new();
-    BIGNUM *bnp        = bi2bn(domain.p());
-    BIGNUM *bng        = bi2bn(domain.g());
-    BIGNUM *bnpub_key  = bi2bn(y);
-    BIGNUM *bnpriv_key = bi2bn(x);
-
-    if (!DH_set0_key(dh, bnpub_key, bnpriv_key) || !DH_set0_pqg(dh, bnp, nullptr, bng)) {
-        DH_free(dh);
-        return;
-    }
-
-    evp.pkey = EVP_PKEY_new();
-    EVP_PKEY_assign_DH(evp.pkey, dh);
-    sec = true;
+    evp.pkey = dhPrivateKey(domain, y, x);
+    if (evp.pkey)
+        sec = true;
 }
 
 void DHKey::createPublic(const DLGroup &domain, const BigInteger &y)
 {
     evp.reset();
-
-    DH     *dh        = DH_new();
-    BIGNUM *bnp       = bi2bn(domain.p());
-    BIGNUM *bng       = bi2bn(domain.g());
-    BIGNUM *bnpub_key = bi2bn(y);
-
-    if (!DH_set0_key(dh, bnpub_key, nullptr) || !DH_set0_pqg(dh, bnp, nullptr, bng)) {
-        DH_free(dh);
-        return;
-    }
-
-    evp.pkey = EVP_PKEY_new();
-    EVP_PKEY_assign_DH(evp.pkey, dh);
     sec = false;
+
+    evp.pkey = dhPublicKey(domain, y);
 }
 
 DLGroup DHKey::domain() const
 {
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    return DLGroup(pkeyBnParameter(evp.pkey, OSSL_PKEY_PARAM_FFC_P), pkeyBnParameter(evp.pkey, OSSL_PKEY_PARAM_FFC_G));
+#else
     const DH     *dh = EVP_PKEY_get0_DH(evp.pkey);
-    const BIGNUM *bnp, *bng;
-    DH_get0_pqg(dh, &bnp, nullptr, &bng);
-    return DLGroup(bn2bi(bnp), bn2bi(bng));
+    const BIGNUM *p  = nullptr;
+    const BIGNUM *g  = nullptr;
+    DH_get0_pqg(dh, &p, nullptr, &g);
+    return DLGroup(bn2bi(p), bn2bi(g));
+#endif
 }
 
 BigInteger DHKey::y() const
 {
-    const DH     *dh = EVP_PKEY_get0_DH(evp.pkey);
-    const BIGNUM *bnpub_key;
-    DH_get0_key(dh, &bnpub_key, nullptr);
-    return bn2bi(bnpub_key);
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    return pkeyBnParameter(evp.pkey, OSSL_PKEY_PARAM_PUB_KEY);
+#else
+    const DH     *dh        = EVP_PKEY_get0_DH(evp.pkey);
+    const BIGNUM *publicKey = nullptr;
+    DH_get0_key(dh, &publicKey, nullptr);
+    return bn2bi(publicKey);
+#endif
 }
 
 BigInteger DHKey::x() const
 {
-    const DH     *dh = EVP_PKEY_get0_DH(evp.pkey);
-    const BIGNUM *bnpriv_key;
-    DH_get0_key(dh, nullptr, &bnpriv_key);
-    return bn2bi(bnpriv_key);
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    return pkeyBnParameter(evp.pkey, OSSL_PKEY_PARAM_PRIV_KEY, true);
+#else
+    const DH     *dh         = EVP_PKEY_get0_DH(evp.pkey);
+    const BIGNUM *privateKey = nullptr;
+    DH_get0_key(dh, nullptr, &privateKey);
+    return bn2bi(privateKey);
+#endif
 }
 
 void DHKey::km_finished()
 {
-    DH *dh = keymaker->takeResult();
+    EVP_PKEY *pkey = keymaker->takeResult();
     if (wasBlocking)
         delete keymaker;
     else
         keymaker->deleteLater();
     keymaker = nullptr;
 
-    if (dh) {
-        evp.pkey = EVP_PKEY_new();
-        EVP_PKEY_assign_DH(evp.pkey, dh);
-        sec = true;
+    if (pkey) {
+        evp.pkey = pkey;
+        sec      = true;
     }
 
     if (!wasBlocking)
         emit finished();
 }
 
-}
+} // namespace opensslQCAPlugin
 
 #include "dhkey.moc"

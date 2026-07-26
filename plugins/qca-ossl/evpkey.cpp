@@ -21,10 +21,77 @@
  */
 
 #include "evpkey.h"
+#include "keyutils.h"
 
 #include <openssl/rsa.h>
 
+#include <limits>
+
 namespace opensslQCAPlugin {
+
+namespace {
+static SecureArray rsaRawSign(EVP_PKEY *pkey, const SecureArray &input)
+{
+    PkeyCtxPtr context(newPkeyContext(pkey));
+    if (!context || EVP_PKEY_sign_init(context.get()) <= 0 ||
+        EVP_PKEY_CTX_set_rsa_padding(context.get(), RSA_PKCS1_PADDING) <= 0)
+        return {};
+
+    size_t outputSize = 0;
+    if (EVP_PKEY_sign(context.get(),
+                      nullptr,
+                      &outputSize,
+                      reinterpret_cast<const unsigned char *>(input.data()),
+                      static_cast<size_t>(input.size())) <= 0 ||
+        outputSize == 0 || outputSize > static_cast<size_t>(std::numeric_limits<int>::max()))
+        return {};
+
+    SecureArray output(static_cast<int>(outputSize));
+    if (EVP_PKEY_sign(context.get(),
+                      reinterpret_cast<unsigned char *>(output.data()),
+                      &outputSize,
+                      reinterpret_cast<const unsigned char *>(input.data()),
+                      static_cast<size_t>(input.size())) <= 0 ||
+        outputSize > static_cast<size_t>(output.size()))
+        return {};
+
+    output.resize(static_cast<int>(outputSize));
+    return output;
+}
+
+static bool rsaRawVerifyRecover(EVP_PKEY *pkey, const SecureArray &signature, SecureArray *output)
+{
+    if (!output)
+        return false;
+
+    PkeyCtxPtr context(newPkeyContext(pkey));
+    if (!context || EVP_PKEY_verify_recover_init(context.get()) <= 0 ||
+        EVP_PKEY_CTX_set_rsa_padding(context.get(), RSA_PKCS1_PADDING) <= 0)
+        return false;
+
+    size_t outputSize = 0;
+    if (EVP_PKEY_verify_recover(context.get(),
+                                nullptr,
+                                &outputSize,
+                                reinterpret_cast<const unsigned char *>(signature.data()),
+                                static_cast<size_t>(signature.size())) <= 0 ||
+        outputSize > static_cast<size_t>(std::numeric_limits<int>::max()))
+        return false;
+
+    SecureArray recovered(static_cast<int>(outputSize));
+    if (EVP_PKEY_verify_recover(context.get(),
+                                reinterpret_cast<unsigned char *>(recovered.data()),
+                                &outputSize,
+                                reinterpret_cast<const unsigned char *>(signature.data()),
+                                static_cast<size_t>(signature.size())) <= 0 ||
+        outputSize > static_cast<size_t>(recovered.size()))
+        return false;
+
+    recovered.resize(static_cast<int>(outputSize));
+    *output = recovered;
+    return true;
+}
+} // namespace
 
 EVPKey::EVPKey()
 {
@@ -37,7 +104,8 @@ EVPKey::EVPKey()
 EVPKey::EVPKey(const EVPKey &from)
 {
     pkey = from.pkey;
-    EVP_PKEY_up_ref(pkey);
+    if (pkey)
+        EVP_PKEY_up_ref(pkey);
     raw_type = false;
     state    = Idle;
     mdctx    = EVP_MD_CTX_new();
@@ -52,8 +120,7 @@ EVPKey::~EVPKey()
 
 void EVPKey::reset()
 {
-    if (pkey)
-        EVP_PKEY_free(pkey);
+    EVP_PKEY_free(pkey);
     pkey = nullptr;
     raw.clear();
     raw_type = false;
@@ -92,97 +159,79 @@ void EVPKey::update(const MemoryRegion &in)
     if (state == SignActive) {
         if (raw_type)
             raw += in;
-        else if (!EVP_SignUpdate(mdctx, in.data(), (unsigned int)in.size()))
+        else if (!EVP_SignUpdate(mdctx, in.data(), static_cast<unsigned int>(in.size())))
             state = SignError;
     } else if (state == VerifyActive) {
         if (raw_type)
             raw += in;
-        else if (!EVP_VerifyUpdate(mdctx, in.data(), (unsigned int)in.size()))
+        else if (!EVP_VerifyUpdate(mdctx, in.data(), static_cast<unsigned int>(in.size())))
             state = VerifyError;
     }
 }
 
 SecureArray EVPKey::endSign()
 {
-    if (state == SignActive) {
-        SecureArray  out(EVP_PKEY_size(pkey));
-        unsigned int len = out.size();
-        if (raw_type) {
-            int type = EVP_PKEY_id(pkey);
+    if (state != SignActive)
+        return {};
 
-            if (type == EVP_PKEY_RSA) {
-                const RSA *rsa = EVP_PKEY_get0_RSA(pkey);
-                if (RSA_private_encrypt(raw.size(),
-                                        (unsigned char *)raw.data(),
-                                        (unsigned char *)out.data(),
-                                        (RSA *)rsa,
-                                        RSA_PKCS1_PADDING) == -1) {
-                    state = SignError;
-                    return SecureArray();
-                }
-            } else if (type == EVP_PKEY_DSA) {
-                state = SignError;
-                return SecureArray();
-            } else {
-                state = SignError;
-                return SecureArray();
-            }
-        } else {
-            if (!EVP_SignFinal(mdctx, (unsigned char *)out.data(), &len, pkey)) {
-                state = SignError;
-                return SecureArray();
-            }
+    SecureArray output;
+    if (raw_type) {
+        if (EVP_PKEY_id(pkey) != EVP_PKEY_RSA) {
+            state = SignError;
+            return {};
         }
-        out.resize(len);
-        state = Idle;
-        return out;
-    } else
-        return SecureArray();
+
+        output = rsaRawSign(pkey, raw);
+        if (output.isEmpty()) {
+            state = SignError;
+            return {};
+        }
+    } else {
+        const int maximumSize = EVP_PKEY_size(pkey);
+        if (maximumSize <= 0) {
+            state = SignError;
+            return {};
+        }
+
+        output.resize(maximumSize);
+        unsigned int outputSize = static_cast<unsigned int>(output.size());
+        if (!EVP_SignFinal(mdctx, reinterpret_cast<unsigned char *>(output.data()), &outputSize, pkey)) {
+            state = SignError;
+            return {};
+        }
+        output.resize(static_cast<int>(outputSize));
+    }
+
+    state = Idle;
+    return output;
 }
 
 bool EVPKey::endVerify(const SecureArray &sig)
 {
-    if (state == VerifyActive) {
-        if (raw_type) {
-            SecureArray out(EVP_PKEY_size(pkey));
-            int         len = 0;
-
-            int type = EVP_PKEY_id(pkey);
-
-            if (type == EVP_PKEY_RSA) {
-                const RSA *rsa = EVP_PKEY_get0_RSA(pkey);
-                if ((len = RSA_public_decrypt(sig.size(),
-                                              (unsigned char *)sig.data(),
-                                              (unsigned char *)out.data(),
-                                              (RSA *)rsa,
-                                              RSA_PKCS1_PADDING)) == -1) {
-                    state = VerifyError;
-                    return false;
-                }
-            } else if (type == EVP_PKEY_DSA) {
-                state = VerifyError;
-                return false;
-            } else {
-                state = VerifyError;
-                return false;
-            }
-
-            out.resize(len);
-
-            if (out != raw) {
-                state = VerifyError;
-                return false;
-            }
-        } else {
-            if (EVP_VerifyFinal(mdctx, (unsigned char *)sig.data(), (unsigned int)sig.size(), pkey) != 1) {
-                state = VerifyError;
-                return false;
-            }
-        }
-        state = Idle;
-        return true;
-    } else
+    if (state != VerifyActive)
         return false;
+
+    if (raw_type) {
+        if (EVP_PKEY_id(pkey) != EVP_PKEY_RSA) {
+            state = VerifyError;
+            return false;
+        }
+
+        SecureArray recovered;
+        if (!rsaRawVerifyRecover(pkey, sig, &recovered) || recovered != raw) {
+            state = VerifyError;
+            return false;
+        }
+    } else if (EVP_VerifyFinal(mdctx,
+                               reinterpret_cast<const unsigned char *>(sig.data()),
+                               static_cast<unsigned int>(sig.size()),
+                               pkey) != 1) {
+        state = VerifyError;
+        return false;
+    }
+
+    state = Idle;
+    return true;
 }
 
-}
+} // namespace opensslQCAPlugin

@@ -25,9 +25,8 @@
 #include <openssl/err.h>
 #include <openssl/rsa.h>
 #include <openssl/x509v3.h>
-
-#ifndef RSA_F_RSA_OSSL_PRIVATE_DECRYPT
-#define RSA_F_RSA_OSSL_PRIVATE_DECRYPT RSA_F_RSA_EAY_PRIVATE_DECRYPT
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+#include <openssl/decoder.h>
 #endif
 
 namespace opensslQCAPlugin {
@@ -40,6 +39,12 @@ int passphrase_cb(char *buf, int size, int rwflag, void *u)
     Q_UNUSED(u);
     return 0;
 }
+
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
+
+#ifndef RSA_F_RSA_OSSL_PRIVATE_DECRYPT
+#define RSA_F_RSA_OSSL_PRIVATE_DECRYPT RSA_F_RSA_EAY_PRIVATE_DECRYPT
+#endif
 
 //----------------------------------------------------------------------------
 // QCA-based RSA_METHOD
@@ -115,11 +120,76 @@ public:
     }
 };
 
-RSA *createFromExisting(const RSAPrivateKey &key)
+static RSA *createFromExistingLegacy(const RSAPrivateKey &key)
 {
     RSA *r = RSA_new();
+    if (!r)
+        return nullptr;
+
     new QCA_RSA_METHOD(key, r); // will delete itself on RSA_free
     return r;
+}
+
+#endif // OPENSSL_VERSION_NUMBER < 0x30000000L
+
+EVP_PKEY *createPkeyFromExisting(const RSAPrivateKey &key)
+{
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    if (key.isNull() || !key.canExport())
+        return nullptr;
+
+    const SecureArray der = key.toDER();
+    if (der.isEmpty())
+        return nullptr;
+
+    const unsigned char *data     = reinterpret_cast<const unsigned char *>(der.constData());
+    size_t               dataSize = static_cast<size_t>(der.size());
+
+    EVP_PKEY *pkey = nullptr;
+
+    OSSL_DECODER_CTX *decoder =
+        OSSL_DECODER_CTX_new_for_pkey(&pkey,
+                                      "DER",
+                                      nullptr, // Allow the decoder to determine PKCS#8 / traditional structure.
+                                      "RSA",
+                                      EVP_PKEY_KEYPAIR,
+                                      nullptr, // Default library context.
+                                      nullptr  // Default property query.
+        );
+
+    if (!decoder)
+        return nullptr;
+
+    const int result = OSSL_DECODER_from_data(decoder, &data, &dataSize);
+
+    OSSL_DECODER_CTX_free(decoder);
+
+    if (result != 1) {
+        EVP_PKEY_free(pkey);
+        return nullptr;
+    }
+
+    return pkey;
+#else
+    EVP_PKEY *pkey = EVP_PKEY_new();
+    if (!pkey)
+        return nullptr;
+
+    RSA *rsa = createFromExistingLegacy(key);
+    if (!rsa) {
+        EVP_PKEY_free(pkey);
+        return nullptr;
+    }
+
+    // Ownership of rsa is transferred to pkey on success.
+    if (EVP_PKEY_assign_RSA(pkey, rsa) != 1) {
+        RSA_free(rsa);
+        EVP_PKEY_free(pkey);
+        return nullptr;
+    }
+
+    return pkey;
+#endif
 }
 
 Validity convert_verify_error(int err)

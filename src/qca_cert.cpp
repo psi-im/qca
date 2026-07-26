@@ -25,7 +25,7 @@
 #include "qcaprovider.h"
 
 #include <QFile>
-#if QT_VERSION < QT_VERSION_CHECK(6,0,0)
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
 #include <QRegExp>
 #else
 #include <QRegularExpression>
@@ -1360,7 +1360,7 @@ static bool cert_match_domain(const QString &certname, const QString &acedomain)
     if (QRegularExpression(QStringLiteral("[^a-z0-9\\.\\*\\-]")).match(name).hasMatch())
         return false;
 
-        // hack into parts, and require at least 1 part
+    // hack into parts, and require at least 1 part
 #if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
     const QStringList parts_name = name.split(QLatin1Char('.'), Qt::KeepEmptyParts);
 #else
@@ -1413,11 +1413,10 @@ static bool cert_match_domain(const QString &certname, const QString &acedomain)
     for (int n = 0; n < parts_name.count(); ++n) {
         const QString &p1 = parts_name[n];
         const QString &p2 = parts_compare[n];
-#if QT_VERSION < QT_VERSION_CHECK(6,0,0)
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
         if (!QRegExp(p1, Qt::CaseSensitive, QRegExp::Wildcard).exactMatch(p2))
 #else
-        const QString exact = QLatin1Char{'^'} + p1 + QLatin1Char{'$'};
-        if (!QRegularExpression::fromWildcard(exact, Qt::CaseSensitive).match(p2).hasMatch())
+        if (!QRegularExpression::fromWildcard(p1, Qt::CaseSensitive).match(p2).hasMatch())
 #endif
             return false;
     }

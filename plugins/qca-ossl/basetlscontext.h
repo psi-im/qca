@@ -56,6 +56,9 @@ public:
     Certificate           cert, peercert; // TODO: support cert chains
     PrivateKey            key;
     QString               targetHostName;
+    QString               receivedHostName;
+    bool                  clientHelloSeen;
+    bool                  clientHelloRetryPending;
 
     Result result_result;
     int    result_encoded;
@@ -76,6 +79,8 @@ public:
     // dummy verification function for SSL_set_verify()
     static int ssl_verify_callback(int preverify_ok, X509_STORE_CTX *x509_ctx);
     static int ssl_error_callback(const char *message, size_t len, void *user_data);
+    static int ssl_client_hello_callback(SSL *ssl, int *alert, void *user_data);
+    static int ssl_servername_callback(SSL *ssl, int *alert, void *user_data);
 
     QStringList                   supportedCipherSuites(const TLS::Version &version) const override;
     bool                          canCompress() const override;
@@ -106,14 +111,16 @@ public:
     virtual BIO *makeWriteBIO();
     virtual BIO *makeReadBIO();
 
-    void       doResultsReady();
-    bool       init();
-    void       getCert();
-    int        doConnect();
-    int        doAccept();
-    int        doHandshake();
-    int        doShutdown();
-    QByteArray readOutgoing();
+    void           doResultsReady();
+    bool           init();
+    bool           applyCertificate();
+    static QString clientHelloHostName(SSL *ssl);
+    void           getCert();
+    int            doConnect();
+    int            doAccept();
+    int            doHandshake();
+    int            doShutdown();
+    QByteArray     readOutgoing();
 };
 
 }

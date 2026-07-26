@@ -47,11 +47,44 @@ private Q_SLOTS:
 
 private:
     QCA::Initializer *m_init;
+    QStringList       m_providersToTest;
 };
 
 void MACUnitTest::initTestCase()
 {
     m_init = new QCA::Initializer;
+
+    QStringList loadedProviderNames;
+    const auto  providers = QCA::providers();
+    for (const QCA::Provider *provider : providers) {
+        loadedProviderNames += provider->name();
+
+        const QStringList features = provider->features();
+        for (const QString &feature : features) {
+            if (feature.startsWith(QLatin1String("hmac("))) {
+                m_providersToTest += provider->name();
+                break;
+            }
+        }
+    }
+
+#ifdef QCA_TEST_EXPECT_OSSL_PLUGIN
+    if (!loadedProviderNames.contains(QStringLiteral("qca-ossl"))) {
+        const QString message = QStringLiteral(
+                                    "qca-ossl was built but was not loaded.\n"
+                                    "QCA plugin paths:\n  %1\n"
+                                    "Loaded providers: %2\n"
+                                    "Plugin diagnostics:\n%3")
+                                    .arg(QCA::pluginPaths().join(QStringLiteral("\n  ")),
+                                         loadedProviderNames.isEmpty() ? QStringLiteral("(none)")
+                                                                       : loadedProviderNames.join(QStringLiteral(", ")),
+                                         QCA::pluginDiagnosticText());
+        QFAIL(qPrintable(message));
+    }
+
+    QVERIFY2(QCA::isSupported("hmac(sha256)", QStringLiteral("qca-ossl")),
+             "qca-ossl is loaded but does not advertise hmac(sha256)");
+#endif
 }
 
 void MACUnitTest::cleanupTestCase()
@@ -61,13 +94,7 @@ void MACUnitTest::cleanupTestCase()
 
 void MACUnitTest::HMACMD5()
 {
-    QStringList providersToTest;
-    providersToTest.append(QStringLiteral("qca-ossl"));
-    providersToTest.append(QStringLiteral("qca-gcrypt"));
-    providersToTest.append(QStringLiteral("qca-botan"));
-    providersToTest.append(QStringLiteral("qca-nss"));
-
-    foreach (const QString provider, providersToTest) {
+    foreach (const QString provider, m_providersToTest) {
         if (!QCA::isSupported("hmac(md5)", provider))
             QWARN((QStringLiteral("HMAC(MD5) not supported for ") + provider).toLocal8Bit().constData());
         else {
@@ -148,13 +175,7 @@ void MACUnitTest::HMACMD5()
 
 void MACUnitTest::HMACSHA256()
 {
-    QStringList providersToTest;
-    providersToTest.append(QStringLiteral("qca-ossl"));
-    providersToTest.append(QStringLiteral("qca-gcrypt"));
-    providersToTest.append(QStringLiteral("qca-botan"));
-    providersToTest.append(QStringLiteral("qca-nss"));
-
-    foreach (const QString provider, providersToTest) {
+    foreach (const QString provider, m_providersToTest) {
         if (!QCA::isSupported("hmac(sha256)", provider))
             QWARN((QStringLiteral("HMAC(SHA256) not supported for ") + provider).toLocal8Bit().constData());
         else {
@@ -236,12 +257,7 @@ void MACUnitTest::HMACSHA256()
 
 void MACUnitTest::HMACSHA224()
 {
-    QStringList providersToTest;
-    providersToTest.append(QStringLiteral("qca-ossl"));
-    providersToTest.append(QStringLiteral("qca-gcrypt"));
-    providersToTest.append(QStringLiteral("qca-botan"));
-
-    foreach (const QString provider, providersToTest) {
+    foreach (const QString provider, m_providersToTest) {
         if (!QCA::isSupported("hmac(sha224)", provider))
             QWARN((QStringLiteral("HMAC(SHA224) not supported for ") + provider).toLocal8Bit().constData());
         else {
@@ -323,13 +339,7 @@ void MACUnitTest::HMACSHA224()
 
 void MACUnitTest::HMACSHA384()
 {
-    QStringList providersToTest;
-    providersToTest.append(QStringLiteral("qca-ossl"));
-    providersToTest.append(QStringLiteral("qca-gcrypt"));
-    providersToTest.append(QStringLiteral("qca-botan"));
-    providersToTest.append(QStringLiteral("qca-nss"));
-
-    foreach (const QString provider, providersToTest) {
+    foreach (const QString provider, m_providersToTest) {
         if (!QCA::isSupported("hmac(sha384)", provider))
             QWARN((QStringLiteral("HMAC(SHA384) not supported for ") + provider).toLocal8Bit().constData());
         else {
@@ -417,13 +427,7 @@ void MACUnitTest::HMACSHA384()
 
 void MACUnitTest::HMACSHA512()
 {
-    QStringList providersToTest;
-    providersToTest.append(QStringLiteral("qca-ossl"));
-    providersToTest.append(QStringLiteral("qca-gcrypt"));
-    providersToTest.append(QStringLiteral("qca-botan"));
-    providersToTest.append(QStringLiteral("qca-nss"));
-
-    foreach (const QString provider, providersToTest) {
+    foreach (const QString provider, m_providersToTest) {
         if (!QCA::isSupported("hmac(sha512)", provider))
             QWARN((QStringLiteral("HMAC(SHA512) not supported for ") + provider).toLocal8Bit().constData());
         else {
@@ -511,13 +515,7 @@ void MACUnitTest::HMACSHA512()
 
 void MACUnitTest::HMACSHA1()
 {
-    QStringList providersToTest;
-    providersToTest.append(QStringLiteral("qca-ossl"));
-    providersToTest.append(QStringLiteral("qca-gcrypt"));
-    providersToTest.append(QStringLiteral("qca-botan"));
-    providersToTest.append(QStringLiteral("qca-nss"));
-
-    foreach (const QString provider, providersToTest) {
+    foreach (const QString provider, m_providersToTest) {
         if (!QCA::isSupported("hmac(sha1)", provider))
             QWARN((QStringLiteral("HMAC(SHA1) not supported for ") + provider).toLocal8Bit().constData());
         else {
@@ -597,13 +595,7 @@ void MACUnitTest::HMACSHA1()
 
 void MACUnitTest::HMACRMD160()
 {
-    QStringList providersToTest;
-    providersToTest.append(QStringLiteral("qca-ossl"));
-    providersToTest.append(QStringLiteral("qca-gcrypt"));
-    providersToTest.append(QStringLiteral("qca-botan"));
-    providersToTest.append(QStringLiteral("qca-nss"));
-
-    foreach (const QString provider, providersToTest) {
+    foreach (const QString provider, m_providersToTest) {
         if (!QCA::isSupported("hmac(ripemd160)", provider))
             QWARN((QStringLiteral("HMAC(RIPEMD160) not supported for ") + provider).toLocal8Bit().constData());
         else {

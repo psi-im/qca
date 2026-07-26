@@ -1,5 +1,6 @@
 /**
- * Copyright (C)  2006  Brad Hards <bradh@frogmouth.net>
+ * Copyright (C) 2006 Brad Hards <bradh@frogmouth.net>
+ * Copyright (C) 2026 QCA contributors
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -23,92 +24,427 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <QEventLoop>
+#include <QHash>
+#include <QHostAddress>
+#include <QSignalSpy>
+#include <QTcpServer>
 #include <QTcpSocket>
 #include <QTest>
+#include <QThread>
+#include <QTimer>
 #include <QtCrypto>
 
 #ifdef QT_STATICPLUGIN
 #include "import_plugins.h"
 #endif
 
-class TlsTest : public QObject
+namespace {
+
+const QString qcaOsslProvider = QStringLiteral("qca-ossl");
+
+QStringList testHostNames()
+{
+    return {
+        QStringLiteral("alice.sni.qca.test"),
+        QStringLiteral("bob.sni.qca.test"),
+        QStringLiteral("carol.sni.qca.test"),
+        QStringLiteral("dave.sni.qca.test"),
+        QStringLiteral("mallory.sni.qca.test"),
+        QStringLiteral("ivan.sni.qca.test"),
+    };
+}
+
+QString certificateFileName(const QString &hostName)
+{
+    return QStringLiteral("velox-certs/%1.crt").arg(hostName.section(QLatin1Char('.'), 0, 0));
+}
+
+QString privateKeyFileName(const QString &hostName)
+{
+    return QStringLiteral("velox-certs/%1.key").arg(hostName.section(QLatin1Char('.'), 0, 0));
+}
+
+struct ServerIdentity
+{
+    QCA::Certificate certificate;
+    QCA::PrivateKey  privateKey;
+
+    bool isValid() const
+    {
+        return !certificate.isNull() && !privateKey.isNull();
+    }
+};
+
+} // namespace
+
+class LocalSniServer;
+
+class SniConnection : public QObject
 {
     Q_OBJECT
 public:
-    TlsTest()
+    SniConnection(QTcpSocket *socket, LocalSniServer *server);
+
+    void stop();
+
+private:
+    void socketReadyRead();
+    void socketDisconnected();
+    void tlsHostNameReceived();
+    void tlsHandshaken();
+    void tlsReadyReadOutgoing();
+    void tlsClosed();
+    void tlsError();
+
+private:
+    QTcpSocket     *m_socket;
+    QCA::TLS       *m_tls;
+    LocalSniServer *m_server;
+};
+
+class LocalSniServer : public QObject
+{
+    Q_OBJECT
+public:
+    explicit LocalSniServer(QObject *parent = nullptr)
+        : QObject(parent)
+        , m_server(nullptr)
     {
-        sock = new QTcpSocket(this);
-        connect(sock, &QTcpSocket::connected, this, &TlsTest::sock_connected);
-        connect(sock, &QTcpSocket::readyRead, this, &TlsTest::sock_readyRead);
+    }
 
-        ssl = new QCA::TLS(this);
-        connect(ssl, &QCA::TLS::handshaken, this, &TlsTest::ssl_handshaken);
-        connect(ssl, &QCA::TLS::readyReadOutgoing, this, &TlsTest::ssl_readyReadOutgoing);
+    ServerIdentity identityForHost(const QString &hostName) const
+    {
+        return m_identities.value(hostName, m_identities.value(QStringLiteral("default.sni.qca.test")));
+    }
 
-        sync = new QCA::Synchronizer(this);
+    void reportHostName(const QString &hostName)
+    {
+        emit serverNameReceived(hostName);
+    }
+
+    void reportConnectionError(const QString &message)
+    {
+        emit connectionError(message);
+    }
+
+public Q_SLOTS:
+    void start()
+    {
+        QString errorMessage;
+        if (!loadIdentities(&errorMessage)) {
+            emit failed(errorMessage);
+            return;
+        }
+
+        m_server = new QTcpServer(this);
+        connect(m_server, &QTcpServer::newConnection, this, &LocalSniServer::newConnection);
+
+        if (!m_server->listen(QHostAddress::LocalHost, 0)) {
+            emit failed(m_server->errorString());
+            return;
+        }
+
+        emit started(m_server->serverPort());
+    }
+
+    void stop()
+    {
+        const QList<SniConnection *> connections = findChildren<SniConnection *>();
+        for (SniConnection *connection : connections) {
+            connection->stop();
+            delete connection;
+        }
+
+        if (m_server) {
+            m_server->close();
+            delete m_server;
+            m_server = nullptr;
+        }
+
+        // Release all provider-backed QCA objects while QCA::Initializer
+        // and the qca-ossl plugin are still alive.
+        m_identities.clear();
+    }
+
+Q_SIGNALS:
+    void started(quint16 port);
+    void failed(const QString &message);
+    void serverNameReceived(const QString &hostName);
+    void connectionError(const QString &message);
+
+private Q_SLOTS:
+    void newConnection()
+    {
+        while (m_server && m_server->hasPendingConnections()) {
+            QTcpSocket *socket = m_server->nextPendingConnection();
+            new SniConnection(socket, this);
+        }
+    }
+
+private:
+    bool loadIdentity(const QString &hostName, QString *errorMessage)
+    {
+        QCA::ConvertResult certificateResult = QCA::ErrorDecode;
+        QCA::ConvertResult keyResult         = QCA::ErrorDecode;
+
+        ServerIdentity identity;
+        identity.certificate =
+            QCA::Certificate::fromPEMFile(certificateFileName(hostName), &certificateResult, qcaOsslProvider);
+        identity.privateKey =
+            QCA::PrivateKey::fromPEMFile(privateKeyFileName(hostName), QCA::SecureArray(), &keyResult, qcaOsslProvider);
+
+        if (certificateResult != QCA::ConvertGood || keyResult != QCA::ConvertGood || !identity.isValid()) {
+            *errorMessage = QStringLiteral("Unable to load the local TLS identity for %1").arg(hostName);
+            return false;
+        }
+
+        m_identities.insert(hostName, identity);
+        return true;
+    }
+
+    bool loadIdentities(QString *errorMessage)
+    {
+        QStringList hostNames = testHostNames();
+        hostNames += QStringLiteral("default.sni.qca.test");
+
+        for (const QString &hostName : hostNames) {
+            if (!loadIdentity(hostName, errorMessage))
+                return false;
+        }
+        return true;
+    }
+
+    QTcpServer                    *m_server;
+    QHash<QString, ServerIdentity> m_identities;
+};
+
+SniConnection::SniConnection(QTcpSocket *socket, LocalSniServer *server)
+    : QObject(server)
+    , m_socket(socket)
+    , m_tls(new QCA::TLS(QCA::TLS::Stream, this, qcaOsslProvider))
+    , m_server(server)
+{
+    m_socket->setParent(this);
+
+    connect(m_socket, &QTcpSocket::readyRead, this, &SniConnection::socketReadyRead);
+    connect(m_socket, &QTcpSocket::disconnected, this, &SniConnection::socketDisconnected);
+
+    connect(m_tls, &QCA::TLS::hostNameReceived, this, &SniConnection::tlsHostNameReceived);
+    connect(m_tls, &QCA::TLS::handshaken, this, &SniConnection::tlsHandshaken);
+    connect(m_tls, &QCA::TLS::readyReadOutgoing, this, &SniConnection::tlsReadyReadOutgoing);
+    connect(m_tls, &QCA::TLS::closed, this, &SniConnection::tlsClosed);
+    connect(m_tls, &QCA::TLS::error, this, &SniConnection::tlsError);
+
+    m_tls->startServer();
+
+    if (m_socket->bytesAvailable() > 0)
+        socketReadyRead();
+}
+
+void SniConnection::stop()
+{
+    if (m_socket)
+        m_socket->abort();
+}
+
+void SniConnection::socketReadyRead()
+{
+    m_tls->writeIncoming(m_socket->readAll());
+}
+
+void SniConnection::socketDisconnected()
+{
+    deleteLater();
+}
+
+void SniConnection::tlsHostNameReceived()
+{
+    const QString hostName = m_tls->hostName();
+    m_server->reportHostName(hostName);
+
+    const ServerIdentity identity = m_server->identityForHost(hostName);
+    if (!identity.isValid()) {
+        m_server->reportConnectionError(QStringLiteral("No TLS identity is available for %1").arg(hostName));
+        m_tls->continueAfterStep();
+        return;
+    }
+
+    QCA::CertificateChain chain;
+    chain.append(identity.certificate);
+    m_tls->setCertificate(chain, identity.privateKey);
+    m_tls->continueAfterStep();
+}
+
+void SniConnection::tlsHandshaken()
+{
+    m_tls->continueAfterStep();
+}
+
+void SniConnection::tlsReadyReadOutgoing()
+{
+    const QByteArray outgoing = m_tls->readOutgoing();
+    if (!outgoing.isEmpty())
+        m_socket->write(outgoing);
+}
+
+void SniConnection::tlsClosed()
+{
+    m_socket->disconnectFromHost();
+}
+
+void SniConnection::tlsError()
+{
+    m_server->reportConnectionError(
+        QStringLiteral("Server-side TLS error %1").arg(static_cast<int>(m_tls->errorCode())));
+    m_socket->abort();
+}
+
+class TlsTest : public QObject
+{
+public:
+    explicit TlsTest(const QCA::Certificate &rootCertificate)
+        : m_socket(new QTcpSocket(this))
+        , m_tls(new QCA::TLS(QCA::TLS::Stream, this, qcaOsslProvider))
+        , m_waitLoop(nullptr)
+        , m_handshaken(false)
+        , m_done(false)
+        , m_identityResult(QCA::TLS::NoCertificate)
+    {
+        QCA::CertificateCollection trustedCertificates;
+        trustedCertificates.addCertificate(rootCertificate);
+        m_tls->setTrustedCertificates(trustedCertificates);
+
+        connect(m_socket, &QTcpSocket::connected, this, &TlsTest::socketConnected);
+        connect(m_socket, &QTcpSocket::readyRead, this, &TlsTest::socketReadyRead);
+        connect(m_socket, &QTcpSocket::disconnected, this, &TlsTest::socketDisconnected);
+#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
+        connect(m_socket, &QTcpSocket::errorOccurred, this, &TlsTest::socketError);
+#else
+        connect(m_socket, QOverload<QAbstractSocket::SocketError>::of(&QTcpSocket::error), this, &TlsTest::socketError);
+#endif
+
+        connect(m_tls, &QCA::TLS::handshaken, this, &TlsTest::tlsHandshaken);
+        connect(m_tls, &QCA::TLS::readyReadOutgoing, this, &TlsTest::tlsReadyReadOutgoing);
+        connect(m_tls, &QCA::TLS::error, this, &TlsTest::tlsError);
     }
 
     ~TlsTest() override
     {
-        delete ssl;
-        delete sock;
+        m_socket->abort();
     }
 
-    void start(const QString &_host, int port)
+    void start(const QString &connectHost, quint16 port, const QString &tlsHostName)
     {
-        host = _host;
-        sock->connectToHost(host, port);
+        m_tlsHostName = tlsHostName;
+        m_socket->connectToHost(connectHost, port);
     }
 
-    void waitForHandshake(int timeout = 20000)
+    bool waitForHandshake(int timeout = 5000)
     {
-        sync->waitForCondition(timeout);
+        if (m_done)
+            return m_handshaken;
+
+        QEventLoop eventLoop;
+        QTimer     timeoutTimer;
+        timeoutTimer.setSingleShot(true);
+
+        connect(&timeoutTimer, &QTimer::timeout, &eventLoop, &QEventLoop::quit);
+
+        m_waitLoop = &eventLoop;
+        timeoutTimer.start(timeout);
+        eventLoop.exec();
+        m_waitLoop = nullptr;
+
+        if (!m_done) {
+            m_done        = true;
+            m_errorString = QStringLiteral("Timed out while waiting for the local TLS handshake");
+            m_socket->abort();
+        }
+
+        return m_handshaken;
     }
 
-    bool isHandshaken()
+    QString errorString() const
     {
-        return ssl->isHandshaken();
+        return m_errorString;
     }
 
-private Q_SLOTS:
-    void sock_connected()
+    QCA::TLS::IdentityResult identityResult() const
     {
-        QCA::CertificateCollection rootCerts;
-        QCA::ConvertResult         resultRootCert;
-        QCA::Certificate rootCert = QCA::Certificate::fromPEMFile(QStringLiteral("root.crt"), &resultRootCert);
-        QCOMPARE(resultRootCert, QCA::ConvertGood);
-        rootCerts.addCertificate(rootCert);
-
-        ssl->setTrustedCertificates(rootCerts);
-
-        ssl->startClient(host);
+        return m_identityResult;
     }
 
-    void sock_readyRead()
+    QCA::Certificate peerCertificate() const
     {
-        ssl->writeIncoming(sock->readAll());
-    }
-
-    void ssl_handshaken()
-    {
-        QCA::TLS::IdentityResult r = ssl->peerIdentityResult();
-
-        QCOMPARE(r, QCA::TLS::Valid);
-
-        sync->conditionMet();
-    }
-
-    void ssl_readyReadOutgoing()
-    {
-        sock->write(ssl->readOutgoing());
+        const QCA::CertificateChain chain = m_tls->peerCertificateChain();
+        return chain.isEmpty() ? QCA::Certificate() : chain.primary();
     }
 
 private:
-    QString            host;
-    QTcpSocket        *sock;
-    QCA::TLS          *ssl;
-    QCA::Certificate   cert;
-    QCA::Synchronizer *sync;
+    void socketConnected()
+    {
+        m_tls->startClient(m_tlsHostName);
+    }
+
+    void socketReadyRead()
+    {
+        m_tls->writeIncoming(m_socket->readAll());
+    }
+
+    void socketDisconnected()
+    {
+        if (!m_done)
+            finish(false, QStringLiteral("The local TLS server disconnected before the handshake completed"));
+    }
+
+    void socketError(QAbstractSocket::SocketError)
+    {
+        if (!m_done)
+            finish(false, m_socket->errorString());
+    }
+
+    void tlsHandshaken()
+    {
+        m_identityResult = m_tls->peerIdentityResult();
+        m_handshaken     = true;
+        m_tls->continueAfterStep();
+        finish(true, QString());
+    }
+
+    void tlsReadyReadOutgoing()
+    {
+        const QByteArray outgoing = m_tls->readOutgoing();
+        if (!outgoing.isEmpty())
+            m_socket->write(outgoing);
+    }
+
+    void tlsError()
+    {
+        finish(false, QStringLiteral("Client-side TLS error %1").arg(static_cast<int>(m_tls->errorCode())));
+    }
+
+private:
+    void finish(bool success, const QString &errorString)
+    {
+        if (m_done)
+            return;
+
+        m_done = true;
+        if (!success)
+            m_errorString = errorString;
+        if (m_waitLoop)
+            m_waitLoop->quit();
+    }
+
+    QTcpSocket              *m_socket;
+    QCA::TLS                *m_tls;
+    QEventLoop              *m_waitLoop;
+    QString                  m_tlsHostName;
+    bool                     m_handshaken;
+    bool                     m_done;
+    QString                  m_errorString;
+    QCA::TLS::IdentityResult m_identityResult;
 };
 
 class VeloxUnitTest : public QObject
@@ -118,98 +454,109 @@ class VeloxUnitTest : public QObject
 private Q_SLOTS:
     void initTestCase();
     void cleanupTestCase();
-    void sniAlice();
-    void sniBob();
-    void sniCarol();
-    void sniDave();
-    void sniMallory();
-    void sniIvan();
+    void sni_data();
+    void sni();
 
 private:
-    QCA::Initializer          *m_init;
-    QCA::CertificateCollection rootCerts;
+    QCA::Initializer *m_init         = nullptr;
+    LocalSniServer   *m_server       = nullptr;
+    QThread          *m_serverThread = nullptr;
+    quint16           m_serverPort   = 0;
+    QCA::Certificate  m_rootCertificate;
 };
 
 void VeloxUnitTest::initTestCase()
 {
     m_init = new QCA::Initializer;
+
+    QVERIFY2(QCA::isSupported("tls", qcaOsslProvider),
+             qPrintable(QStringLiteral("TLS is not available from qca-ossl.\n%1").arg(QCA::pluginDiagnosticText())));
+
+    QCA::ConvertResult rootResult = QCA::ErrorDecode;
+    m_rootCertificate =
+        QCA::Certificate::fromPEMFile(QStringLiteral("velox-certs/root.crt"), &rootResult, qcaOsslProvider);
+    QCOMPARE(rootResult, QCA::ConvertGood);
+    QVERIFY(!m_rootCertificate.isNull());
+
+    m_server       = new LocalSniServer;
+    m_serverThread = new QThread;
+    m_server->moveToThread(m_serverThread);
+
+    connect(m_serverThread, &QThread::started, m_server, &LocalSniServer::start);
+    connect(m_serverThread, &QThread::finished, m_server, &QObject::deleteLater);
+
+    QSignalSpy startedSpy(m_server, &LocalSniServer::started);
+    QSignalSpy failedSpy(m_server, &LocalSniServer::failed);
+
+    m_serverThread->start();
+
+    QTRY_VERIFY_WITH_TIMEOUT(startedSpy.count() > 0 || failedSpy.count() > 0, 5000);
+    if (!failedSpy.isEmpty())
+        QFAIL(qPrintable(failedSpy.constFirst().constFirst().toString()));
+
+    QCOMPARE(startedSpy.count(), 1);
+    m_serverPort = startedSpy.constFirst().constFirst().toUInt();
+    QVERIFY(m_serverPort != 0);
 }
 
 void VeloxUnitTest::cleanupTestCase()
 {
+    if (m_server && m_serverThread && m_serverThread->isRunning()) {
+        QMetaObject::invokeMethod(m_server, &LocalSniServer::stop, Qt::BlockingQueuedConnection);
+        m_serverThread->quit();
+        m_serverThread->wait();
+    }
+
+    delete m_serverThread;
+    m_serverThread = nullptr;
+    m_server       = nullptr;
+
+    // m_rootCertificate owns a provider context. It must be destroyed
+    // before QCA::Initializer unloads qca-ossl.
+    m_rootCertificate = QCA::Certificate();
+
     delete m_init;
+    m_init = nullptr;
 }
 
-void VeloxUnitTest::sniAlice()
+void VeloxUnitTest::sni_data()
 {
-    if (!QCA::isSupported("tls", QStringLiteral("qca-ossl")))
-        QWARN("TLS not supported for qca-ossl");
-    else {
-        TlsTest *s = new TlsTest;
-        s->start(QStringLiteral("alice.sni.velox.ch"), 443);
-        s->waitForHandshake();
-        QVERIFY(s->isHandshaken());
+    QTest::addColumn<QString>("hostName");
+
+    const QStringList hostNames = testHostNames();
+    for (const QString &hostName : hostNames) {
+        const QByteArray rowName = hostName.section(QLatin1Char('.'), 0, 0).toLatin1();
+        QTest::newRow(rowName.constData()) << hostName;
     }
 }
 
-void VeloxUnitTest::sniBob()
+void VeloxUnitTest::sni()
 {
-    if (!QCA::isSupported("tls", QStringLiteral("qca-ossl")))
-        QWARN("TLS not supported for qca-ossl");
-    else {
-        TlsTest *s = new TlsTest;
-        s->start(QStringLiteral("bob.sni.velox.ch"), 443);
-        s->waitForHandshake();
-        QVERIFY(s->isHandshaken());
-    }
-}
+    QFETCH(QString, hostName);
 
-void VeloxUnitTest::sniCarol()
-{
-    if (!QCA::isSupported("tls", QStringLiteral("qca-ossl")))
-        QWARN("TLS not supported for qca-ossl");
-    else {
-        TlsTest *s = new TlsTest;
-        s->start(QStringLiteral("carol.sni.velox.ch"), 443);
-        s->waitForHandshake();
-        QVERIFY(s->isHandshaken());
-    }
-}
+    QSignalSpy serverNameSpy(m_server, &LocalSniServer::serverNameReceived);
+    QSignalSpy serverErrorSpy(m_server, &LocalSniServer::connectionError);
 
-void VeloxUnitTest::sniDave()
-{
-    if (!QCA::isSupported("tls", QStringLiteral("qca-ossl")))
-        QWARN("TLS not supported for qca-ossl");
-    else {
-        TlsTest *s = new TlsTest;
-        s->start(QStringLiteral("dave.sni.velox.ch"), 443);
-        s->waitForHandshake();
-        QVERIFY(s->isHandshaken());
-    }
-}
+    TlsTest client(m_rootCertificate);
+    client.start(QHostAddress(QHostAddress::LocalHost).toString(), m_serverPort, hostName);
 
-void VeloxUnitTest::sniMallory()
-{
-    if (!QCA::isSupported("tls", QStringLiteral("qca-ossl")))
-        QWARN("TLS not supported for qca-ossl");
-    else {
-        TlsTest *s = new TlsTest;
-        s->start(QStringLiteral("mallory.sni.velox.ch"), 443);
-        s->waitForHandshake();
-        QVERIFY(s->isHandshaken());
-    }
-}
+    QVERIFY2(client.waitForHandshake(), qPrintable(client.errorString()));
+    QCOMPARE(client.identityResult(), QCA::TLS::Valid);
 
-void VeloxUnitTest::sniIvan()
-{
-    if (!QCA::isSupported("tls", QStringLiteral("qca-ossl")))
-        QWARN("TLS not supported for qca-ossl");
-    else {
-        TlsTest *s = new TlsTest;
-        s->start(QStringLiteral("ivan.sni.velox.ch"), 443);
-        s->waitForHandshake();
-        QVERIFY(s->isHandshaken());
-    }
+    const QCA::Certificate peerCertificate = client.peerCertificate();
+    QVERIFY(!peerCertificate.isNull());
+    QVERIFY(peerCertificate.matchesHostName(hostName));
+
+    QCA::ConvertResult     expectedResult = QCA::ErrorDecode;
+    const QCA::Certificate expectedCertificate =
+        QCA::Certificate::fromPEMFile(certificateFileName(hostName), &expectedResult, qcaOsslProvider);
+    QCOMPARE(expectedResult, QCA::ConvertGood);
+    QVERIFY(peerCertificate == expectedCertificate);
+
+    QTRY_COMPARE_WITH_TIMEOUT(serverNameSpy.count(), 1, 1000);
+    QCOMPARE(serverNameSpy.constFirst().constFirst().toString(), hostName);
+    QVERIFY2(serverErrorSpy.isEmpty(),
+             serverErrorSpy.isEmpty() ? "" : qPrintable(serverErrorSpy.constFirst().constFirst().toString()));
 }
 
 QTEST_MAIN(VeloxUnitTest)

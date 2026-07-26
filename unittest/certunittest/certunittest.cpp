@@ -30,6 +30,13 @@
 #include "import_plugins.h"
 #endif
 
+#if QT_VERSION < QT_VERSION_CHECK(6, 9, 0)
+#define TimeZoneUTC Qt::UTC
+#else
+#include <QTimeZone>
+#define TimeZoneUTC QTimeZone::UTC
+#endif
+
 class CertUnitTest : public QObject
 {
     Q_OBJECT
@@ -134,9 +141,9 @@ void CertUnitTest::CAcertstest()
             QCOMPARE(ca1.commonName(), QStringLiteral("For Tests Only"));
 
             QCOMPARE(ca1.notValidBefore().toString(),
-                     QDateTime(QDate(2001, 8, 17), QTime(8, 30, 39), Qt::UTC).toString());
+                     QDateTime(QDate(2001, 8, 17), QTime(8, 30, 39), TimeZoneUTC).toString());
             QCOMPARE(ca1.notValidAfter().toString(),
-                     QDateTime(QDate(2011, 8, 15), QTime(8, 30, 39), Qt::UTC).toString());
+                     QDateTime(QDate(2011, 8, 15), QTime(8, 30, 39), TimeZoneUTC).toString());
 
             QCOMPARE(ca1.constraints().contains(QCA::DigitalSignature) == true, true);
             QCOMPARE(ca1.constraints().contains(QCA::NonRepudiation) == true, true);
@@ -189,9 +196,9 @@ void CertUnitTest::qualitysslcatest()
             QCOMPARE(ca1.commonName(), QStringLiteral("Comodo Class 3 Security Services CA"));
 
             QCOMPARE(ca1.notValidBefore().toString(),
-                     QDateTime(QDate(2002, 8, 27), QTime(19, 02, 00), Qt::UTC).toString());
+                     QDateTime(QDate(2002, 8, 27), QTime(19, 02, 00), TimeZoneUTC).toString());
             QCOMPARE(ca1.notValidAfter().toString(),
-                     QDateTime(QDate(2012, 8, 27), QTime(23, 59, 00), Qt::UTC).toString());
+                     QDateTime(QDate(2012, 8, 27), QTime(23, 59, 00), TimeZoneUTC).toString());
 
             QCOMPARE(ca1.pathLimit(), 0);
 
@@ -240,9 +247,9 @@ void CertUnitTest::checkExpiredClientCerts()
             QCOMPARE(client1.commonName(), QStringLiteral("Insecure User Test Cert"));
 
             QCOMPARE(client1.notValidBefore().toString(),
-                     QDateTime(QDate(2001, 8, 17), QTime(8, 32, 38), Qt::UTC).toString());
+                     QDateTime(QDate(2001, 8, 17), QTime(8, 32, 38), TimeZoneUTC).toString());
             QCOMPARE(client1.notValidAfter().toString(),
-                     QDateTime(QDate(2006, 8, 16), QTime(8, 32, 38), Qt::UTC).toString());
+                     QDateTime(QDate(2006, 8, 16), QTime(8, 32, 38), TimeZoneUTC).toString());
 
             QCOMPARE(client1.constraints().contains(QCA::DigitalSignature) == true, true);
             QCOMPARE(client1.constraints().contains(QCA::NonRepudiation) == true, true);
@@ -354,9 +361,9 @@ void CertUnitTest::checkClientCerts()
             QCOMPARE(client2.commonName(), QStringLiteral("Qca Test Client Certificate"));
 
             QCOMPARE(client2.notValidBefore().toString(),
-                     QDateTime(QDate(2013, 7, 31), QTime(15, 14, 28), Qt::UTC).toString());
+                     QDateTime(QDate(2013, 7, 31), QTime(15, 14, 28), TimeZoneUTC).toString());
             QCOMPARE(client2.notValidAfter().toString(),
-                     QDateTime(QDate(2033, 7, 26), QTime(15, 14, 28), Qt::UTC).toString());
+                     QDateTime(QDate(2033, 7, 26), QTime(15, 14, 28), TimeZoneUTC).toString());
 
             QCOMPARE(client2.constraints().contains(QCA::DigitalSignature) == true, true);
             QCOMPARE(client2.constraints().contains(QCA::NonRepudiation) == true, true);
@@ -487,9 +494,9 @@ void CertUnitTest::derCAcertstest()
             QCOMPARE(ii.value(QCA::Country), QStringLiteral("de"));
 
             QCOMPARE(ca1.notValidBefore().toString(),
-                     QDateTime(QDate(2001, 8, 17), QTime(8, 30, 39), Qt::UTC).toString());
+                     QDateTime(QDate(2001, 8, 17), QTime(8, 30, 39), TimeZoneUTC).toString());
             QCOMPARE(ca1.notValidAfter().toString(),
-                     QDateTime(QDate(2011, 8, 15), QTime(8, 30, 39), Qt::UTC).toString());
+                     QDateTime(QDate(2011, 8, 15), QTime(8, 30, 39), TimeZoneUTC).toString());
 
             QCOMPARE(ca1.constraints().contains(QCA::DigitalSignature) == true, true);
             QCOMPARE(ca1.constraints().contains(QCA::NonRepudiation) == true, true);
@@ -799,9 +806,9 @@ void CertUnitTest::checkExpiredServerCerts()
             QCOMPARE(server1.commonName(), QStringLiteral("Insecure Server Cert"));
 
             QCOMPARE(server1.notValidBefore().toString(),
-                     QDateTime(QDate(2001, 8, 17), QTime(8, 46, 24), Qt::UTC).toString());
+                     QDateTime(QDate(2001, 8, 17), QTime(8, 46, 24), TimeZoneUTC).toString());
             QCOMPARE(server1.notValidAfter().toString(),
-                     QDateTime(QDate(2006, 8, 16), QTime(8, 46, 24), Qt::UTC).toString());
+                     QDateTime(QDate(2006, 8, 16), QTime(8, 46, 24), TimeZoneUTC).toString());
 
             QCOMPARE(server1.constraints().contains(QCA::DigitalSignature) == true, true);
             QCOMPARE(server1.constraints().contains(QCA::NonRepudiation) == true, false);
@@ -907,9 +914,9 @@ void CertUnitTest::checkServerCerts()
             QCOMPARE(server1.commonName(), QStringLiteral("Qca Server Test certificate"));
 
             QCOMPARE(server1.notValidBefore().toString(),
-                     QDateTime(QDate(2013, 7, 31), QTime(15, 23, 25), Qt::UTC).toString());
+                     QDateTime(QDate(2013, 7, 31), QTime(15, 23, 25), TimeZoneUTC).toString());
             QCOMPARE(server1.notValidAfter().toString(),
-                     QDateTime(QDate(2033, 7, 26), QTime(15, 23, 25), Qt::UTC).toString());
+                     QDateTime(QDate(2033, 7, 26), QTime(15, 23, 25), TimeZoneUTC).toString());
 
             QCOMPARE(server1.constraints().contains(QCA::DigitalSignature) == true, true);
             QCOMPARE(server1.constraints().contains(QCA::NonRepudiation) == true, true);
@@ -1035,8 +1042,8 @@ void CertUnitTest::crl()
             // No keyid extension on this crl
             QCOMPARE(QCA::arrayToHex(crl1.issuerKeyId()), QLatin1String(""));
 
-            QCOMPARE(crl1.thisUpdate(), QDateTime(QDate(2001, 8, 17), QTime(11, 12, 03), Qt::UTC));
-            QCOMPARE(crl1.nextUpdate(), QDateTime(QDate(2006, 8, 16), QTime(11, 12, 03), Qt::UTC));
+            QCOMPARE(crl1.thisUpdate(), QDateTime(QDate(2001, 8, 17), QTime(11, 12, 03), TimeZoneUTC));
+            QCOMPARE(crl1.nextUpdate(), QDateTime(QDate(2006, 8, 16), QTime(11, 12, 03), TimeZoneUTC));
 
             QCOMPARE(crl1.signatureAlgorithm(), QCA::EMSA3_MD5);
 
@@ -1052,8 +1059,8 @@ void CertUnitTest::crl()
             QCOMPARE(revokedList[1].serialNumber(), QCA::BigInteger("5"));
             QCOMPARE(revokedList[0].reason(), QCA::CRLEntry::Unspecified);
             QCOMPARE(revokedList[1].reason(), QCA::CRLEntry::Unspecified);
-            QCOMPARE(revokedList[0].time(), QDateTime(QDate(2001, 8, 17), QTime(11, 10, 39), Qt::UTC));
-            QCOMPARE(revokedList[1].time(), QDateTime(QDate(2001, 8, 17), QTime(11, 11, 59), Qt::UTC));
+            QCOMPARE(revokedList[0].time(), QDateTime(QDate(2001, 8, 17), QTime(11, 10, 39), TimeZoneUTC));
+            QCOMPARE(revokedList[1].time(), QDateTime(QDate(2001, 8, 17), QTime(11, 11, 59), TimeZoneUTC));
 
             // convert to DER
             QByteArray derCRL1 = crl1.toDER();
@@ -1091,8 +1098,8 @@ void CertUnitTest::crl2()
             QVERIFY(issuer.contains(QCA::Organization, QStringLiteral("Test Certificates")));
             QVERIFY(issuer.contains(QCA::CommonName, QStringLiteral("Good CA")));
 
-            QCOMPARE(crl1.thisUpdate(), QDateTime(QDate(2001, 4, 19), QTime(14, 57, 20), Qt::UTC));
-            QCOMPARE(crl1.nextUpdate(), QDateTime(QDate(2011, 4, 19), QTime(14, 57, 20), Qt::UTC));
+            QCOMPARE(crl1.thisUpdate(), QDateTime(QDate(2001, 4, 19), QTime(14, 57, 20), TimeZoneUTC));
+            QCOMPARE(crl1.nextUpdate(), QDateTime(QDate(2011, 4, 19), QTime(14, 57, 20), TimeZoneUTC));
 
             QCOMPARE(crl1.signatureAlgorithm(), QCA::EMSA3_SHA1);
 
@@ -1108,8 +1115,8 @@ void CertUnitTest::crl2()
             QCOMPARE(revokedList[1].serialNumber(), QCA::BigInteger("15"));
             QCOMPARE(revokedList[0].reason(), QCA::CRLEntry::KeyCompromise);
             QCOMPARE(revokedList[1].reason(), QCA::CRLEntry::KeyCompromise);
-            QCOMPARE(revokedList[0].time(), QDateTime(QDate(2001, 4, 19), QTime(14, 57, 20), Qt::UTC));
-            QCOMPARE(revokedList[1].time(), QDateTime(QDate(2001, 4, 19), QTime(14, 57, 20), Qt::UTC));
+            QCOMPARE(revokedList[0].time(), QDateTime(QDate(2001, 4, 19), QTime(14, 57, 20), TimeZoneUTC));
+            QCOMPARE(revokedList[1].time(), QDateTime(QDate(2001, 4, 19), QTime(14, 57, 20), TimeZoneUTC));
 
             // convert to DER
             QByteArray derCRL1 = crl1.toDER();

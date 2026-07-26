@@ -27,6 +27,9 @@
 #include "utils.h"
 
 #include <QDebug>
+#include <QUrl>
+
+#include <openssl/err.h>
 
 namespace opensslQCAPlugin {
 
@@ -35,6 +38,8 @@ BaseOsslTLSContext::BaseOsslTLSContext(Provider *p, const QString &type)
 {
     ssl     = nullptr;
     context = nullptr;
+    rbio    = nullptr;
+    wbio    = nullptr;
     reset();
 }
 
@@ -56,8 +61,11 @@ bool BaseOsslTLSContext::canCompress() const
 
 bool BaseOsslTLSContext::canSetHostName() const
 {
-    // TODO
+#ifdef SSL_CTRL_SET_TLSEXT_HOSTNAME
+    return true;
+#else
     return false;
+#endif
 }
 
 int BaseOsslTLSContext::maxSSF() const
@@ -81,11 +89,11 @@ void BaseOsslTLSContext::setConstraints(const QStringList &cipherSuiteList)
 
 void BaseOsslTLSContext::setup(bool serverMode, const QString &hostName, bool compress)
 {
-    serv = serverMode;
-    if (false == serverMode) {
-        // client
-        targetHostName = hostName;
-    }
+    serv           = serverMode;
+    targetHostName = serverMode ? QString() : hostName;
+    receivedHostName.clear();
+    clientHelloSeen         = false;
+    clientHelloRetryPending = false;
     Q_UNUSED(compress); // TODO
 }
 
@@ -103,7 +111,12 @@ void BaseOsslTLSContext::setCertificate(const CertificateChain &_cert, const Pri
 {
     if (!_cert.isEmpty())
         cert = _cert.primary(); // TODO: take the whole chain
+
     key = _key;
+
+    if (ssl && !cert.isNull() && !key.isNull() && !applyCertificate()) {
+        ERR_print_errors_cb(&BaseOsslTLSContext::ssl_error_callback, this);
+    }
 }
 
 void BaseOsslTLSContext::setSessionId(const TLSSessionContext &id)
@@ -114,8 +127,7 @@ void BaseOsslTLSContext::setSessionId(const TLSSessionContext &id)
 
 bool BaseOsslTLSContext::clientHelloReceived() const
 {
-    // TODO
-    return false;
+    return clientHelloSeen;
 }
 
 bool BaseOsslTLSContext::serverHelloReceived() const
@@ -126,8 +138,7 @@ bool BaseOsslTLSContext::serverHelloReceived() const
 
 QString BaseOsslTLSContext::hostName() const
 {
-    // TODO
-    return QString();
+    return receivedHostName;
 }
 
 bool BaseOsslTLSContext::certificateRequested() const
@@ -202,7 +213,11 @@ int BaseOsslTLSContext::doAccept()
     int ret = SSL_accept(ssl);
     if (ret < 0) {
         int x = SSL_get_error(ssl, ret);
-        if (x == SSL_ERROR_WANT_CONNECT || x == SSL_ERROR_WANT_READ || x == SSL_ERROR_WANT_WRITE)
+        if (x == SSL_ERROR_WANT_CONNECT || x == SSL_ERROR_WANT_READ || x == SSL_ERROR_WANT_WRITE
+#ifdef SSL_ERROR_WANT_CLIENT_HELLO_CB
+            || x == SSL_ERROR_WANT_CLIENT_HELLO_CB
+#endif
+        )
             return TryAgain;
         else
             return Bad;
@@ -277,7 +292,9 @@ void BaseOsslTLSContext::reset()
 {
     if (ssl) {
         SSL_free(ssl);
-        ssl = nullptr;
+        ssl  = nullptr;
+        rbio = nullptr;
+        wbio = nullptr;
     }
     if (context) {
         SSL_CTX_free(context);
@@ -286,6 +303,11 @@ void BaseOsslTLSContext::reset()
 
     cert = Certificate();
     key  = PrivateKey();
+
+    targetHostName.clear();
+    receivedHostName.clear();
+    clientHelloSeen         = false;
+    clientHelloRetryPending = false;
 
     mode     = Idle;
     peercert = Certificate();
@@ -310,6 +332,91 @@ int BaseOsslTLSContext::ssl_error_callback(const char *message, size_t len, void
         QStringLiteral("%1: ssl_error_callback: %2").arg(context->type(), QString::fromLocal8Bit(message, len)),
         Logger::Error);
     return 1;
+}
+
+QString BaseOsslTLSContext::clientHelloHostName(SSL *ssl)
+{
+#if OPENSSL_VERSION_NUMBER >= 0x10101000L && !defined(LIBRESSL_VERSION_NUMBER) && defined(TLSEXT_TYPE_server_name)
+    const unsigned char *extension       = nullptr;
+    size_t               extensionLength = 0;
+
+    if (SSL_client_hello_get0_ext(ssl, TLSEXT_TYPE_server_name, &extension, &extensionLength) != 1 ||
+        extensionLength < 2) {
+        return QString();
+    }
+
+    const size_t listLength = (static_cast<size_t>(extension[0]) << 8) | extension[1];
+    if (listLength + 2 != extensionLength)
+        return QString();
+
+    const unsigned char *position  = extension + 2;
+    size_t               remaining = listLength;
+
+    while (remaining >= 3) {
+        const unsigned int nameType   = position[0];
+        const size_t       nameLength = (static_cast<size_t>(position[1]) << 8) | position[2];
+        position += 3;
+        remaining -= 3;
+
+        if (nameLength > remaining)
+            return QString();
+
+        if (nameType == TLSEXT_NAMETYPE_host_name) {
+            const QByteArray aceName(reinterpret_cast<const char *>(position), static_cast<int>(nameLength));
+            if (aceName.isEmpty() || aceName.contains('\0'))
+                return QString();
+            return QUrl::fromAce(aceName);
+        }
+
+        position += nameLength;
+        remaining -= nameLength;
+    }
+#else
+    Q_UNUSED(ssl);
+#endif
+
+    return QString();
+}
+
+int BaseOsslTLSContext::ssl_client_hello_callback(SSL *ssl, int *alert, void *user_data)
+{
+    Q_UNUSED(alert);
+
+#if OPENSSL_VERSION_NUMBER >= 0x10101000L && !defined(LIBRESSL_VERSION_NUMBER) && defined(TLSEXT_TYPE_server_name)
+    auto *tlsContext = static_cast<BaseOsslTLSContext *>(user_data);
+    if (!tlsContext || !tlsContext->serv)
+        return SSL_CLIENT_HELLO_SUCCESS;
+
+    if (tlsContext->clientHelloRetryPending) {
+        tlsContext->clientHelloRetryPending = false;
+        return SSL_CLIENT_HELLO_SUCCESS;
+    }
+
+    if (tlsContext->clientHelloSeen)
+        return SSL_CLIENT_HELLO_SUCCESS;
+
+    tlsContext->clientHelloSeen  = true;
+    tlsContext->receivedHostName = clientHelloHostName(ssl);
+
+    if (tlsContext->receivedHostName.isEmpty())
+        return SSL_CLIENT_HELLO_SUCCESS;
+
+    tlsContext->clientHelloRetryPending = true;
+    return SSL_CLIENT_HELLO_RETRY;
+#else
+    Q_UNUSED(ssl);
+    Q_UNUSED(user_data);
+    return 1;
+#endif
+}
+
+int BaseOsslTLSContext::ssl_servername_callback(SSL *ssl, int *alert, void *user_data)
+{
+    Q_UNUSED(ssl);
+    Q_UNUSED(alert);
+
+    const auto *tlsContext = static_cast<const BaseOsslTLSContext *>(user_data);
+    return tlsContext && !tlsContext->receivedHostName.isEmpty() ? SSL_TLSEXT_ERR_OK : SSL_TLSEXT_ERR_NOACK;
 }
 
 QStringList BaseOsslTLSContext::supportedCipherSuites(const TLS::Version &version) const
@@ -432,11 +539,50 @@ TLSContext::SessionInfo BaseOsslTLSContext::sessionInfo() const
     return sessInfo;
 }
 
+bool BaseOsslTLSContext::applyCertificate()
+{
+    if (!ssl || cert.isNull() || key.isNull())
+        return true;
+
+    PrivateKey nkey = key;
+
+    const PKeyContext *tmp_kc = static_cast<const PKeyContext *>(nkey.context());
+
+    if (!tmp_kc->sameProvider(this)) {
+        EVP_PKEY *pkey = createPkeyFromExisting(key.toRSA());
+        if (!pkey)
+            return false;
+
+        MyPKeyContext *pk = new MyPKeyContext(provider());
+        PKeyBase      *k  = pk->pkeyToBase(pkey, true); // does an EVP_PKEY_free()
+        if (!k) {
+            delete pk;
+            return false;
+        }
+        pk->k = k;
+        nkey.change(pk);
+    }
+
+    const MyCertContext *cc = static_cast<const MyCertContext *>(cert.context());
+    const MyPKeyContext *kc = static_cast<const MyPKeyContext *>(nkey.context());
+
+    return SSL_use_certificate(ssl, cc->item.cert) == 1 && SSL_use_PrivateKey(ssl, kc->get_pkey()) == 1 &&
+        SSL_check_private_key(ssl) == 1;
+}
+
 bool BaseOsslTLSContext::init()
 {
     context = SSL_CTX_new(method);
     if (!context)
         return false;
+
+#if OPENSSL_VERSION_NUMBER >= 0x10101000L && !defined(LIBRESSL_VERSION_NUMBER) && defined(TLSEXT_TYPE_server_name)
+    if (serv) {
+        SSL_CTX_set_client_hello_cb(context, &BaseOsslTLSContext::ssl_client_hello_callback, this);
+        SSL_CTX_set_tlsext_servername_callback(context, &BaseOsslTLSContext::ssl_servername_callback);
+        SSL_CTX_set_tlsext_servername_arg(context, this);
+    }
+#endif
 
     // setup the cert store
     {
@@ -447,13 +593,13 @@ bool BaseOsslTLSContext::init()
         for (n = 0; n < cert_list.count(); ++n) {
             const MyCertContext *cc = static_cast<const MyCertContext *>(cert_list[n].context());
             X509                *x  = cc->item.cert;
-            // CRYPTO_add(&x->references, 1, CRYPTO_LOCK_X509);
+            // X509_STORE_add_cert() increments the certificate reference count.
             X509_STORE_add_cert(store, x);
         }
         for (n = 0; n < crl_list.count(); ++n) {
             const MyCRLContext *cc = static_cast<const MyCRLContext *>(crl_list[n].context());
             X509_CRL           *x  = cc->item.crl;
-            // CRYPTO_add(&x->references, 1, CRYPTO_LOCK_X509_CRL);
+            // X509_STORE_add_crl() increments the CRL reference count.
             X509_STORE_add_crl(store, x);
         }
     }
@@ -467,62 +613,50 @@ bool BaseOsslTLSContext::init()
     SSL_set_ssl_method(ssl, method); // can this return error?
 
 #ifdef SSL_CTRL_SET_TLSEXT_HOSTNAME
-    if (targetHostName.isEmpty() == false) {
-        // we have a target
-        // this might fail, but we ignore that for now
-        char *hostname = targetHostName.toLatin1().data();
-        SSL_set_tlsext_host_name(ssl, hostname);
+    if (!targetHostName.isEmpty()) {
+        const QByteArray hostname = QUrl::toAce(targetHostName);
+        if (SSL_set_tlsext_host_name(ssl, hostname.constData()) != 1) {
+            SSL_free(ssl);
+            ssl  = nullptr;
+            rbio = nullptr;
+            wbio = nullptr;
+            SSL_CTX_free(context);
+            context = nullptr;
+            return false;
+        }
     }
 #endif
 
-    // setup the memory bio
     rbio = makeReadBIO();
     wbio = makeWriteBIO();
+    if (!rbio || !wbio) {
+        BIO_free(rbio);
+        BIO_free(wbio);
+        rbio = nullptr;
+        wbio = nullptr;
+        SSL_free(ssl);
+        ssl = nullptr;
+        SSL_CTX_free(context);
+        context = nullptr;
+        return false;
+    }
 
-    // this passes control of the bios to ssl.  we don't need to free them.
+    // this passes control of the bios to ssl. we don't need to free them.
     SSL_set_bio(ssl, rbio, wbio);
 
-    // FIXME: move this to after server hello
-    // setup the cert to send
-    if (!cert.isNull() && !key.isNull()) {
-        PrivateKey nkey = key;
-
-        const PKeyContext *tmp_kc = static_cast<const PKeyContext *>(nkey.context());
-
-        if (!tmp_kc->sameProvider(this)) {
-            // fprintf(stderr, "experimental: private key supplied by a different provider\n");
-
-            // make a pkey pointing to the existing private key
-            EVP_PKEY *pkey;
-            pkey = EVP_PKEY_new();
-            EVP_PKEY_assign_RSA(pkey, createFromExisting(nkey.toRSA()));
-
-            // make a new private key object to hold it
-            MyPKeyContext *pk = new MyPKeyContext(provider());
-            PKeyBase      *k  = pk->pkeyToBase(pkey, true); // does an EVP_PKEY_free()
-            pk->k             = k;
-            nkey.change(pk);
-        }
-
-        const MyCertContext *cc = static_cast<const MyCertContext *>(cert.context());
-        const MyPKeyContext *kc = static_cast<const MyPKeyContext *>(nkey.context());
-
-        if (SSL_use_certificate(ssl, cc->item.cert) != 1) {
-            SSL_free(ssl);
-            SSL_CTX_free(context);
-            return false;
-        }
-        if (SSL_use_PrivateKey(ssl, kc->get_pkey()) != 1) {
-            SSL_free(ssl);
-            SSL_CTX_free(context);
-            return false;
-        }
+    if (!applyCertificate()) {
+        SSL_free(ssl);
+        ssl  = nullptr;
+        rbio = nullptr;
+        wbio = nullptr;
+        SSL_CTX_free(context);
+        context = nullptr;
+        return false;
     }
 
     // request a certificate from the client, if in server mode
-    if (serv) {
+    if (serv)
         SSL_set_verify(ssl, SSL_VERIFY_PEER | SSL_VERIFY_CLIENT_ONCE, ssl_verify_callback);
-    }
 
     return true;
 }

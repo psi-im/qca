@@ -21,77 +21,220 @@
  */
 
 #include "dsakey.h"
+#include "keyutils.h"
 #include "utils.h"
 
-namespace {
-static const auto DsaDeleter = [](DSA *pointer) {
-    if (pointer)
-        DSA_free((DSA *)pointer);
-};
-} // end of anonymous namespace
+#include <cstring>
+#include <memory>
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+#include <openssl/core_names.h>
+#endif
 
 namespace opensslQCAPlugin {
 
-// take lowest bytes of BIGNUM to fit
-// pad with high byte zeroes to fit
-static SecureArray bn2fixedbuf(const BIGNUM *n, int size)
+namespace {
+struct DsaSigDeleter
 {
-    SecureArray buf(BN_num_bytes(n));
-    BN_bn2bin(n, (unsigned char *)buf.data());
+    void operator()(DSA_SIG *pointer) const
+    {
+        DSA_SIG_free(pointer);
+    }
+};
 
-    SecureArray out(size);
-    memset(out.data(), 0, size);
-    int len = qMin(size, buf.size());
-    memcpy(out.data() + (size - len), buf.data(), len);
-    return out;
+using DsaSigPtr = std::unique_ptr<DSA_SIG, DsaSigDeleter>;
+
+// Take the lowest bytes of a BIGNUM and pad with leading zeroes.
+static SecureArray bn2fixedbuf(const BIGNUM *number, int size)
+{
+    if (!number || size < 0)
+        return {};
+
+    SecureArray buffer(BN_num_bytes(number));
+    if (buffer.size() > 0)
+        BN_bn2bin(number, reinterpret_cast<unsigned char *>(buffer.data()));
+
+    SecureArray result(size);
+    if (size > 0)
+        std::memset(result.data(), 0, static_cast<size_t>(size));
+
+    const int length = qMin(size, buffer.size());
+    if (length > 0)
+        std::memcpy(result.data() + (size - length), buffer.data(), static_cast<size_t>(length));
+
+    return result;
 }
 
-static SecureArray dsasig_der_to_raw(const SecureArray &in)
+static SecureArray dsasig_der_to_raw(const SecureArray &input)
 {
-    DSA_SIG             *sig = DSA_SIG_new();
-    const unsigned char *inp = (const unsigned char *)in.data();
-    d2i_DSA_SIG(&sig, &inp, in.size());
+    const unsigned char *data = reinterpret_cast<const unsigned char *>(input.data());
+    DsaSigPtr            sig(d2i_DSA_SIG(nullptr, &data, input.size()));
+    if (!sig)
+        return {};
 
-    const BIGNUM *bnr, *bns;
-    DSA_SIG_get0(sig, &bnr, &bns);
+    const BIGNUM *r = nullptr;
+    const BIGNUM *s = nullptr;
+    DSA_SIG_get0(sig.get(), &r, &s);
+    if (!r || !s)
+        return {};
 
-    SecureArray part_r = bn2fixedbuf(bnr, 20);
-    SecureArray part_s = bn2fixedbuf(bns, 20);
     SecureArray result;
-    result.append(part_r);
-    result.append(part_s);
-
-    DSA_SIG_free(sig);
+    result.append(bn2fixedbuf(r, 20));
+    result.append(bn2fixedbuf(s, 20));
     return result;
 }
 
-static SecureArray dsasig_raw_to_der(const SecureArray &in)
+static SecureArray dsasig_raw_to_der(const SecureArray &input)
 {
-    if (in.size() != 40)
-        return SecureArray();
+    if (input.size() != 40)
+        return {};
 
-    DSA_SIG    *sig = DSA_SIG_new();
-    SecureArray part_r(20);
-    BIGNUM     *bnr;
-    SecureArray part_s(20);
-    BIGNUM     *bns;
-    memcpy(part_r.data(), in.data(), 20);
-    memcpy(part_s.data(), in.data() + 20, 20);
-    bnr = BN_bin2bn((const unsigned char *)part_r.data(), part_r.size(), nullptr);
-    bns = BN_bin2bn((const unsigned char *)part_s.data(), part_s.size(), nullptr);
+    DsaSigPtr sig(DSA_SIG_new());
+    BnPtr     r(BN_bin2bn(reinterpret_cast<const unsigned char *>(input.data()), 20, nullptr));
+    BnPtr     s(BN_bin2bn(reinterpret_cast<const unsigned char *>(input.data() + 20), 20, nullptr));
+    if (!sig || !r || !s || DSA_SIG_set0(sig.get(), r.get(), s.get()) != 1)
+        return {};
 
-    if (DSA_SIG_set0(sig, bnr, bns) == 0)
-        return SecureArray();
-    // Not documented what happens in the failure case, free bnr and bns?
+    r.release();
+    s.release();
 
-    int            len = i2d_DSA_SIG(sig, nullptr);
-    SecureArray    result(len);
-    unsigned char *p = (unsigned char *)result.data();
-    i2d_DSA_SIG(sig, &p);
+    const int length = i2d_DSA_SIG(sig.get(), nullptr);
+    if (length <= 0)
+        return {};
 
-    DSA_SIG_free(sig);
+    SecureArray    result(length);
+    unsigned char *data = reinterpret_cast<unsigned char *>(result.data());
+    if (i2d_DSA_SIG(sig.get(), &data) != length)
+        return {};
+
     return result;
 }
+
+static EVP_PKEY *dsaFromBignums(const BIGNUM *p, const BIGNUM *q, const BIGNUM *g, const BIGNUM *y, const BIGNUM *x)
+{
+    if (!p || !q || !g || !y)
+        return nullptr;
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    if (x) {
+        return pkeyFromBnParameters("DSA",
+                                    EVP_PKEY_KEYPAIR,
+                                    {{OSSL_PKEY_PARAM_FFC_P, p},
+                                     {OSSL_PKEY_PARAM_FFC_Q, q},
+                                     {OSSL_PKEY_PARAM_FFC_G, g},
+                                     {OSSL_PKEY_PARAM_PUB_KEY, y},
+                                     {OSSL_PKEY_PARAM_PRIV_KEY, x}});
+    }
+
+    return pkeyFromBnParameters("DSA",
+                                EVP_PKEY_PUBLIC_KEY,
+                                {{OSSL_PKEY_PARAM_FFC_P, p},
+                                 {OSSL_PKEY_PARAM_FFC_Q, q},
+                                 {OSSL_PKEY_PARAM_FFC_G, g},
+                                 {OSSL_PKEY_PARAM_PUB_KEY, y}});
+#else
+    struct DsaDeleter
+    {
+        void operator()(DSA *pointer) const
+        {
+            DSA_free(pointer);
+        }
+    };
+
+    std::unique_ptr<DSA, DsaDeleter> dsa(DSA_new());
+    BnPtr                            pCopy(BN_dup(p));
+    BnPtr                            qCopy(BN_dup(q));
+    BnPtr                            gCopy(BN_dup(g));
+    BnPtr                            yCopy(BN_dup(y));
+    BnClearPtr                       xCopy(x ? BN_dup(x) : nullptr);
+
+    if (!dsa || !pCopy || !qCopy || !gCopy || !yCopy || (x && !xCopy))
+        return nullptr;
+
+    if (DSA_set0_pqg(dsa.get(), pCopy.get(), qCopy.get(), gCopy.get()) != 1)
+        return nullptr;
+
+    pCopy.release();
+    qCopy.release();
+    gCopy.release();
+
+    if (DSA_set0_key(dsa.get(), yCopy.get(), xCopy.get()) != 1)
+        return nullptr;
+
+    yCopy.release();
+    if (x)
+        xCopy.release();
+
+    EVP_PKEY *result = EVP_PKEY_new();
+    if (!result)
+        return nullptr;
+
+    if (EVP_PKEY_assign_DSA(result, dsa.get()) != 1) {
+        EVP_PKEY_free(result);
+        return nullptr;
+    }
+
+    dsa.release();
+    return result;
+#endif
+}
+
+static EVP_PKEY *dsaFromParameters(const DLGroup &domain, const BigInteger &y, const BigInteger *x)
+{
+    BnPtr      p(bi2bn(domain.p()));
+    BnPtr      q(bi2bn(domain.q()));
+    BnPtr      g(bi2bn(domain.g()));
+    BnPtr      publicKey(bi2bn(y));
+    BnClearPtr privateKey(x ? bi2bn(*x) : nullptr);
+
+    if (!p || !q || !g || !publicKey || (x && !privateKey))
+        return nullptr;
+
+    if (privateKey)
+        BN_set_flags(privateKey.get(), BN_FLG_CONSTTIME);
+
+    return dsaFromBignums(p.get(), q.get(), g.get(), publicKey.get(), privateKey.get());
+}
+
+static EVP_PKEY *dsaPublicKey(const DLGroup &domain, const BigInteger &y)
+{
+    return dsaFromParameters(domain, y, nullptr);
+}
+
+static EVP_PKEY *dsaPrivateKey(const DLGroup &domain, const BigInteger &y, const BigInteger &x)
+{
+    return dsaFromParameters(domain, y, &x);
+}
+
+static EVP_PKEY *generateDsaKey(const DLGroup &domain)
+{
+    BnPtr p(bi2bn(domain.p()));
+    BnPtr q(bi2bn(domain.q()));
+    BnPtr g(bi2bn(domain.g()));
+    if (!p || !q || !g || BN_is_negative(p.get()) || BN_is_negative(q.get()) || BN_is_negative(g.get()) ||
+        !BN_is_odd(p.get()) || BN_cmp(p.get(), BN_value_one()) <= 0 || BN_cmp(q.get(), BN_value_one()) <= 0 ||
+        BN_cmp(g.get(), BN_value_one()) <= 0 || BN_cmp(q.get(), p.get()) >= 0 || BN_cmp(g.get(), p.get()) >= 0)
+        return nullptr;
+
+    BnClearPtr privateKey(BN_secure_new());
+    BnPtr      publicKey(BN_new());
+    BnCtxPtr   context(BN_CTX_secure_new());
+    if (!privateKey || !publicKey || !context)
+        return nullptr;
+
+    BN_set_flags(privateKey.get(), BN_FLG_CONSTTIME);
+
+    do {
+        if (BN_priv_rand_range(privateKey.get(), q.get()) != 1)
+            return nullptr;
+    } while (BN_is_zero(privateKey.get()));
+
+    if (BN_mod_exp_mont_consttime(publicKey.get(), g.get(), privateKey.get(), p.get(), context.get(), nullptr) != 1)
+        return nullptr;
+
+    return dsaFromBignums(p.get(), q.get(), g.get(), publicKey.get(), privateKey.get());
+}
+} // namespace
 
 //----------------------------------------------------------------------------
 // DSAKey
@@ -100,8 +243,8 @@ class DSAKeyMaker : public QThread
 {
     Q_OBJECT
 public:
-    DLGroup domain;
-    DSA    *result;
+    DLGroup   domain;
+    EVP_PKEY *result;
 
     DSAKeyMaker(const DLGroup &_domain, QObject *parent = nullptr)
         : QThread(parent)
@@ -113,60 +256,19 @@ public:
     ~DSAKeyMaker() override
     {
         wait();
-        if (result)
-            DSA_free(result);
+        EVP_PKEY_free(result);
     }
 
     void run() override
     {
-        std::unique_ptr<DSA, decltype(DsaDeleter)> dsa(DSA_new(), DsaDeleter);
-        BIGNUM *pne = bi2bn(domain.p()), *qne = bi2bn(domain.q()), *gne = bi2bn(domain.g());
-
-        if (!DSA_set0_pqg(dsa.get(), pne, qne, gne)) {
-            return;
-        }
-        if (!DSA_generate_key(dsa.get())) {
-            // OPENSSL_VERSION_MAJOR is only defined in openssl3
-#ifdef OPENSSL_VERSION_MAJOR
-            // HACK
-            // in openssl3 there is an internal flag for "legacy" values
-            //      bits < 2048 && seed_len <= 20
-            // set in ossl_ffc_params_FIPS186_2_generate (called by DSA_generate_parameters_ex)
-            // that we have no way to get or set, so if the bits are smaller than 2048 we generate
-            // a dsa from a dummy seed and then override the p/q/g with the ones we want
-            // so we can reuse the internal flag
-            if (BN_num_bits(pne) < 2048) {
-                int dummy;
-                dsa.reset(DSA_new());
-                if (DSA_generate_parameters_ex(
-                        dsa.get(), 512, (const unsigned char *)"THIS_IS_A_DUMMY_SEED", 20, &dummy, nullptr, nullptr) !=
-                    1) {
-                    return;
-                }
-                pne = bi2bn(domain.p());
-                qne = bi2bn(domain.q());
-                gne = bi2bn(domain.g());
-                if (!DSA_set0_pqg(dsa.get(), pne, qne, gne)) {
-                    return;
-                }
-                if (!DSA_generate_key(dsa.get())) {
-                    return;
-                }
-            } else {
-                return;
-            }
-#else
-            return;
-#endif
-        }
-        result = dsa.release();
+        result = generateDsaKey(domain);
     }
 
-    DSA *takeResult()
+    EVP_PKEY *takeResult()
     {
-        DSA *dsa = result;
-        result   = nullptr;
-        return dsa;
+        EVP_PKEY *pkey = result;
+        result         = nullptr;
+        return pkey;
     }
 };
 
@@ -197,7 +299,7 @@ Provider::Context *DSAKey::clone() const
 
 bool DSAKey::isNull() const
 {
-    return (evp.pkey ? false : true);
+    return !evp.pkey;
 }
 
 PKey::Type DSAKey::type() const
@@ -220,20 +322,13 @@ void DSAKey::convertToPublic()
     if (!sec)
         return;
 
-    // extract the public key into DER format
-    const DSA     *dsa_pkey = EVP_PKEY_get0_DSA(evp.pkey);
-    int            len      = i2d_DSAPublicKey(dsa_pkey, nullptr);
-    SecureArray    result(len);
-    unsigned char *p = (unsigned char *)result.data();
-    i2d_DSAPublicKey(dsa_pkey, &p);
-    p = (unsigned char *)result.data();
+    EVP_PKEY *publicKey = dsaPublicKey(domain(), y());
+    if (!publicKey)
+        return;
 
-    // put the DER public key back into openssl
     evp.reset();
-    DSA *dsa = d2i_DSAPublicKey(nullptr, (const unsigned char **)&p, result.size());
-    evp.pkey = EVP_PKEY_new();
-    EVP_PKEY_assign_DSA(evp.pkey, dsa);
-    sec = false;
+    evp.pkey = publicKey;
+    sec      = false;
 }
 
 int DSAKey::bits() const
@@ -243,23 +338,15 @@ int DSAKey::bits() const
 
 void DSAKey::startSign(SignatureAlgorithm, SignatureFormat format)
 {
-    // openssl native format is DER, so transform otherwise
-    if (format != DERSequence)
-        transformsig = true;
-    else
-        transformsig = false;
-
+    // OpenSSL native format is DER, so transform otherwise.
+    transformsig = format != DERSequence;
     evp.startSign(EVP_sha1());
 }
 
 void DSAKey::startVerify(SignatureAlgorithm, SignatureFormat format)
 {
-    // openssl native format is DER, so transform otherwise
-    if (format != DERSequence)
-        transformsig = true;
-    else
-        transformsig = false;
-
+    // OpenSSL native format is DER, so transform otherwise.
+    transformsig = format != DERSequence;
     evp.startVerify(EVP_sha1());
 }
 
@@ -270,26 +357,24 @@ void DSAKey::update(const MemoryRegion &in)
 
 QByteArray DSAKey::endSign()
 {
-    SecureArray out = evp.endSign();
-    if (transformsig)
-        return dsasig_der_to_raw(out).toByteArray();
-    else
-        return out.toByteArray();
+    const SecureArray output = evp.endSign();
+    return transformsig ? dsasig_der_to_raw(output).toByteArray() : output.toByteArray();
 }
 
 bool DSAKey::endVerify(const QByteArray &sig)
 {
-    SecureArray in;
+    SecureArray input;
     if (transformsig)
-        in = dsasig_raw_to_der(sig);
+        input = dsasig_raw_to_der(sig);
     else
-        in = sig;
-    return evp.endVerify(in);
+        input = sig;
+    return evp.endVerify(input);
 }
 
 void DSAKey::createPrivate(const DLGroup &domain, bool block)
 {
     evp.reset();
+    sec = false;
 
     keymaker    = new DSAKeyMaker(domain, !block ? this : nullptr);
     wasBlocking = block;
@@ -305,87 +390,79 @@ void DSAKey::createPrivate(const DLGroup &domain, bool block)
 void DSAKey::createPrivate(const DLGroup &domain, const BigInteger &y, const BigInteger &x)
 {
     evp.reset();
+    sec = false;
 
-    DSA    *dsa        = DSA_new();
-    BIGNUM *bnp        = bi2bn(domain.p());
-    BIGNUM *bnq        = bi2bn(domain.q());
-    BIGNUM *bng        = bi2bn(domain.g());
-    BIGNUM *bnpub_key  = bi2bn(y);
-    BIGNUM *bnpriv_key = bi2bn(x);
-
-    if (!DSA_set0_pqg(dsa, bnp, bnq, bng) || !DSA_set0_key(dsa, bnpub_key, bnpriv_key)) {
-        DSA_free(dsa);
-        return;
-    }
-
-    evp.pkey = EVP_PKEY_new();
-    EVP_PKEY_assign_DSA(evp.pkey, dsa);
-    sec = true;
+    evp.pkey = dsaPrivateKey(domain, y, x);
+    if (evp.pkey)
+        sec = true;
 }
 
 void DSAKey::createPublic(const DLGroup &domain, const BigInteger &y)
 {
     evp.reset();
-
-    DSA    *dsa       = DSA_new();
-    BIGNUM *bnp       = bi2bn(domain.p());
-    BIGNUM *bnq       = bi2bn(domain.q());
-    BIGNUM *bng       = bi2bn(domain.g());
-    BIGNUM *bnpub_key = bi2bn(y);
-
-    if (!DSA_set0_pqg(dsa, bnp, bnq, bng) || !DSA_set0_key(dsa, bnpub_key, nullptr)) {
-        DSA_free(dsa);
-        return;
-    }
-
-    evp.pkey = EVP_PKEY_new();
-    EVP_PKEY_assign_DSA(evp.pkey, dsa);
     sec = false;
+
+    evp.pkey = dsaPublicKey(domain, y);
 }
 
 DLGroup DSAKey::domain() const
 {
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    return DLGroup(pkeyBnParameter(evp.pkey, OSSL_PKEY_PARAM_FFC_P),
+                   pkeyBnParameter(evp.pkey, OSSL_PKEY_PARAM_FFC_Q),
+                   pkeyBnParameter(evp.pkey, OSSL_PKEY_PARAM_FFC_G));
+#else
     const DSA    *dsa = EVP_PKEY_get0_DSA(evp.pkey);
-    const BIGNUM *bnp, *bnq, *bng;
-    DSA_get0_pqg(dsa, &bnp, &bnq, &bng);
-    return DLGroup(bn2bi(bnp), bn2bi(bnq), bn2bi(bng));
+    const BIGNUM *p   = nullptr;
+    const BIGNUM *q   = nullptr;
+    const BIGNUM *g   = nullptr;
+    DSA_get0_pqg(dsa, &p, &q, &g);
+    return DLGroup(bn2bi(p), bn2bi(q), bn2bi(g));
+#endif
 }
 
 BigInteger DSAKey::y() const
 {
-    const DSA    *dsa = EVP_PKEY_get0_DSA(evp.pkey);
-    const BIGNUM *bnpub_key;
-    DSA_get0_key(dsa, &bnpub_key, nullptr);
-    return bn2bi(bnpub_key);
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    return pkeyBnParameter(evp.pkey, OSSL_PKEY_PARAM_PUB_KEY);
+#else
+    const DSA    *dsa       = EVP_PKEY_get0_DSA(evp.pkey);
+    const BIGNUM *publicKey = nullptr;
+    DSA_get0_key(dsa, &publicKey, nullptr);
+    return bn2bi(publicKey);
+#endif
 }
 
 BigInteger DSAKey::x() const
 {
-    const DSA    *dsa = EVP_PKEY_get0_DSA(evp.pkey);
-    const BIGNUM *bnpriv_key;
-    DSA_get0_key(dsa, nullptr, &bnpriv_key);
-    return bn2bi(bnpriv_key);
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    return pkeyBnParameter(evp.pkey, OSSL_PKEY_PARAM_PRIV_KEY, true);
+#else
+    const DSA    *dsa        = EVP_PKEY_get0_DSA(evp.pkey);
+    const BIGNUM *privateKey = nullptr;
+    DSA_get0_key(dsa, nullptr, &privateKey);
+    return bn2bi(privateKey);
+#endif
 }
 
 void DSAKey::km_finished()
 {
-    DSA *dsa = keymaker->takeResult();
+    EVP_PKEY *pkey = keymaker->takeResult();
     if (wasBlocking)
         delete keymaker;
     else
         keymaker->deleteLater();
     keymaker = nullptr;
 
-    if (dsa) {
-        evp.pkey = EVP_PKEY_new();
-        EVP_PKEY_assign_DSA(evp.pkey, dsa);
-        sec = true;
+    if (pkey) {
+        evp.pkey = pkey;
+        sec      = true;
     }
 
     if (!wasBlocking)
         emit finished();
 }
 
-}
+} // namespace opensslQCAPlugin
 
 #include "dsakey.moc"
