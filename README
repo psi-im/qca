@@ -21,6 +21,7 @@ was born.
     * Added DTLS support
     * Added TLS channel binding
     * SRTP support (see "use_srtp" in RFC5764)
+    * Added Android certificate system store support
 
   Planned features:
     * MS Windows SChannel plugin
