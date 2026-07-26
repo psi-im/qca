@@ -103,6 +103,11 @@ OsslDTLSContext::OsslDTLSContext(Provider *p)
 {
 }
 
+OsslDTLSContext::~OsslDTLSContext()
+{
+    reset();
+}
+
 void OsslDTLSContext::reset()
 {
     BaseOsslTLSContext::reset();

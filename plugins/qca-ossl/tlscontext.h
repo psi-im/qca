@@ -38,6 +38,7 @@ public:
     QByteArray result_plain;
 
     OsslTLSContext(Provider *p);
+    ~OsslTLSContext();
 
     void       reset() override;
     void       start() override;

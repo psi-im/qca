@@ -64,7 +64,7 @@ void RSAUnitTest::testrsa()
     foreach (const QString provider, providersToTest) {
         if (!QCA::isSupported("pkey", provider) || !QCA::PKey::supportedTypes(provider).contains(QCA::PKey::RSA) ||
             !QCA::PKey::supportedIOTypes(provider).contains(QCA::PKey::RSA))
-            QWARN((QStringLiteral("RSA not supported for ") + provider).toLocal8Bit().constData());
+            qWarning("RSA not supported for %s", provider.toLocal8Bit().constData());
         else {
             QCA::KeyGenerator keygen;
             QCOMPARE(keygen.isBusy(), false);
@@ -166,7 +166,7 @@ void RSAUnitTest::testAsymmetricEncryption()
     if (!QCA::isSupported("pkey", QStringLiteral("qca-ossl")) ||
         !QCA::PKey::supportedTypes(QStringLiteral("qca-ossl")).contains(QCA::PKey::RSA) ||
         !QCA::PKey::supportedIOTypes(QStringLiteral("qca-ossl")).contains(QCA::PKey::RSA)) {
-        QWARN("RSA not supported");
+        qWarning("RSA not supported");
         QSKIP("RSA not supported. skipping");
     }
 

@@ -42,6 +42,7 @@ public:
     int mtuSize = 1400;
 
     OsslDTLSContext(Provider *p);
+    ~OsslDTLSContext();
 
     void reset() override;
     void start() override;
