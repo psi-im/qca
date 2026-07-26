@@ -31,13 +31,9 @@
 
 #include <QDebug>
 #include <QElapsedTimer>
+#include <QRandomGenerator>
 #include <QtCrypto>
 #include <QtPlugin>
-
-#include <qcaprovider.h>
-#if QT_VERSION >= QT_VERSION_CHECK(5, 10, 0)
-#include <QRandomGenerator>
-#endif
 
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
@@ -45,7 +41,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
-#include <memory>
 
 #include <openssl/err.h>
 #include <openssl/opensslv.h>
@@ -56,6 +51,10 @@
 #include <openssl/x509v3.h>
 #ifdef OPENSSL_VERSION_MAJOR
 #include <openssl/provider.h>
+#endif
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+#include <openssl/core_names.h>
+#include <openssl/params.h>
 #endif
 
 #ifndef LIBRESSL_VERSION_NUMBER
@@ -505,30 +504,98 @@ public:
 class opensslHMACContext : public MACContext
 {
     Q_OBJECT
+
 public:
     opensslHMACContext(const EVP_MD *algorithm, Provider *p, const QString &type)
         : MACContext(p, type)
+        , m_algorithm(algorithm)
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+        , m_mac(EVP_MAC_fetch(nullptr, "HMAC", nullptr))
+        , m_context(m_mac ? EVP_MAC_CTX_new(m_mac) : nullptr)
+#else
+        , m_context(HMAC_CTX_new())
+#endif
     {
-        m_algorithm = algorithm;
-        m_context   = HMAC_CTX_new();
     }
 
     opensslHMACContext(const opensslHMACContext &other)
         : MACContext(other)
+        , m_algorithm(other.m_algorithm)
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+        , m_mac(other.m_mac)
+        , m_context(nullptr)
+#else
+        , m_context(HMAC_CTX_new())
+#endif
+        , m_initialized(other.m_initialized)
     {
-        m_algorithm = other.m_algorithm;
-        m_context   = HMAC_CTX_new();
-        HMAC_CTX_copy(m_context, other.m_context);
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+        if (m_mac && EVP_MAC_up_ref(m_mac) != 1)
+            m_mac = nullptr;
+
+        if (m_mac && other.m_context)
+            m_context = EVP_MAC_CTX_dup(other.m_context);
+
+        if (other.m_context && !m_context)
+            m_initialized = false;
+#else
+        if (!m_context || !other.m_context || HMAC_CTX_copy(m_context, other.m_context) != 1) {
+            HMAC_CTX_free(m_context);
+            m_context     = nullptr;
+            m_initialized = false;
+        }
+#endif
     }
 
     ~opensslHMACContext() override
     {
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+        EVP_MAC_CTX_free(m_context);
+        EVP_MAC_free(m_mac);
+#else
         HMAC_CTX_free(m_context);
+#endif
     }
 
     void setup(const SymmetricKey &key) override
     {
-        HMAC_Init_ex(m_context, key.data(), key.size(), m_algorithm, nullptr);
+        m_initialized = false;
+
+        if (!m_context || !m_algorithm)
+            return;
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+        const char *digestName = EVP_MD_get0_name(m_algorithm);
+        if (!digestName) {
+            resetContext();
+            return;
+        }
+
+        OSSL_PARAM params[] = {
+            OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_DIGEST, const_cast<char *>(digestName), 0),
+            OSSL_PARAM_construct_end()};
+
+        // EVP_MAC_init() treats nullptr specially. Use a non-null pointer
+        // so that a zero-length HMAC key remains a real empty key.
+        static const unsigned char emptyKey = 0;
+
+        const auto *keyData = reinterpret_cast<const unsigned char *>(key.data());
+
+        if (!keyData)
+            keyData = &emptyKey;
+
+        if (EVP_MAC_init(m_context, keyData, static_cast<size_t>(key.size()), params) != 1) {
+            resetContext();
+            return;
+        }
+#else
+        if (HMAC_Init_ex(m_context, key.data(), static_cast<int>(key.size()), m_algorithm, nullptr) != 1) {
+            HMAC_CTX_reset(m_context);
+            return;
+        }
+#endif
+
+        m_initialized = true;
     }
 
     KeyLength keyLength() const override
@@ -538,15 +605,76 @@ public:
 
     void update(const MemoryRegion &a) override
     {
-        HMAC_Update(m_context, (unsigned char *)a.data(), a.size());
+        if (!m_initialized || !m_context || a.size() == 0)
+            return;
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+        if (EVP_MAC_update(
+                m_context, reinterpret_cast<const unsigned char *>(a.data()), static_cast<size_t>(a.size())) != 1) {
+            m_initialized = false;
+            resetContext();
+        }
+#else
+        if (HMAC_Update(m_context, reinterpret_cast<const unsigned char *>(a.data()), static_cast<size_t>(a.size())) !=
+            1) {
+            m_initialized = false;
+            HMAC_CTX_reset(m_context);
+        }
+#endif
     }
 
     void final(MemoryRegion *out) override
     {
-        SecureArray sa(EVP_MD_size(m_algorithm), 0);
-        HMAC_Final(m_context, (unsigned char *)sa.data(), nullptr);
+        SecureArray result;
+
+        if (!m_initialized || !m_context) {
+            *out = result;
+            return;
+        }
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+        const size_t maximumSize = EVP_MAC_CTX_get_mac_size(m_context);
+
+        if (maximumSize == 0 || maximumSize > static_cast<size_t>(std::numeric_limits<int>::max())) {
+            resetContext();
+            m_initialized = false;
+            *out          = result;
+            return;
+        }
+
+        result.resize(static_cast<int>(maximumSize));
+
+        size_t actualSize = 0;
+
+        if (EVP_MAC_final(m_context, reinterpret_cast<unsigned char *>(result.data()), &actualSize, maximumSize) == 1) {
+            result.resize(static_cast<int>(actualSize));
+        } else {
+            result = SecureArray();
+        }
+
+        // EVP_MAC_CTX has no equivalent of HMAC_CTX_reset().
+        // Recreate it so the next setup() starts with a clean context.
+        resetContext();
+#else
+        const int maximumSize = EVP_MD_size(m_algorithm);
+
+        if (maximumSize > 0) {
+            result.resize(maximumSize);
+
+            unsigned int actualSize = 0;
+
+            if (HMAC_Final(m_context, reinterpret_cast<unsigned char *>(result.data()), &actualSize) == 1) {
+                result.resize(static_cast<int>(actualSize));
+            } else {
+                result = SecureArray();
+            }
+        }
+
         HMAC_CTX_reset(m_context);
-        *out = sa;
+#endif
+
+        m_initialized = false;
+        *out          = result;
     }
 
     Provider::Context *clone() const override
@@ -554,9 +682,27 @@ public:
         return new opensslHMACContext(*this);
     }
 
-protected:
-    HMAC_CTX     *m_context;
-    const EVP_MD *m_algorithm;
+private:
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    void resetContext()
+    {
+        EVP_MAC_CTX *newContext = m_mac ? EVP_MAC_CTX_new(m_mac) : nullptr;
+
+        EVP_MAC_CTX_free(m_context);
+        m_context = newContext;
+    }
+#endif
+
+    const EVP_MD *m_algorithm = nullptr;
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    EVP_MAC     *m_mac     = nullptr;
+    EVP_MAC_CTX *m_context = nullptr;
+#else
+    HMAC_CTX *m_context = nullptr;
+#endif
+
+    bool m_initialized = false;
 };
 
 //----------------------------------------------------------------------------
@@ -611,15 +757,68 @@ static const char *IETF_4096_PRIME =
 // clang-format on
 
 #ifndef OPENSSL_FIPS
-// JCE seeds from Botan
-static const char *JCE_512_SEED    = "B869C82B 35D70E1B 1FF91B28 E37A62EC DC34409B";
-static const int   JCE_512_COUNTER = 123;
+// JCE DSA-512 parameters derived using FIPS 186-2.
+// Seed: B869C82B35D70E1B1FF91B28E37A62ECDC34409B
+// Counter: 123
+static const char *JCE_512_P =
+    "FCA682CE 8E12CABA 26EFCCF7 110E526D"
+    "B078B05E DECBCD1E B4A208F3 AE1617AE"
+    "01F35B91 A47E6DF6 3413C5E1 2ED0899B"
+    "CD132ACD 50D99151 BDC43EE7 37592E17";
 
-static const char *JCE_768_SEED    = "77D0F8C4 DAD15EB8 C4F2F8D6 726CEFD9 6D5BB399";
-static const int   JCE_768_COUNTER = 263;
+static const char *JCE_512_Q = "962EDDCC 369CBA8E BB260EE6 B6A126D9 346E38C5";
 
-static const char *JCE_1024_SEED    = "8D515589 4229D5E6 89EE01E6 018A237E 2CAE64CD";
-static const int   JCE_1024_COUNTER = 92;
+static const char *JCE_512_G =
+    "678471B2 7A9CF44E E91A49C5 147DB1A9"
+    "AAF244F0 5A434D64 86931D2D 14271B9E"
+    "35030B71 FD73DA17 9069B32E 2935630E"
+    "1C206235 4D0DA20A 6C416E50 BE794CA4";
+
+// JCE DSA-768 parameters derived using FIPS 186-2.
+// Seed: 77D0F8C4DAD15EB8C4F2F8D6726CEFD96D5BB399
+// Counter: 263
+static const char *JCE_768_P =
+    "E9E64259 9D355F37 C97FFD35 67120B8E"
+    "25C9CD43 E927B3A9 670FBEC5 D8901419"
+    "22D2C3B3 AD248009 3799869D 1E846AAB"
+    "49FAB0AD 26D2CE6A 22219D47 0BCE7D77"
+    "7D4A21FB E9C270B5 7F607002 F3CEF839"
+    "3694CF45 EE3688C1 1A8C56AB 127A3DAF";
+
+static const char *JCE_768_Q = "9CDBD84C 9F1AC2F3 8D0F80F4 2AB952E7 338BF511";
+
+static const char *JCE_768_G =
+    "30470AD5 A005FB14 CE2D9DCD 87E38BC7"
+    "D1B1C5FA CBAECBE9 5F190AA7 A31D23C4"
+    "DBBCBE06 17454440 1A5B2C02 0965D8C2"
+    "BD2171D3 66844577 1F74BA08 4D2029D8"
+    "3C1C1585 47F3A9F1 A2715BE2 3D51AE4D"
+    "3E5A1F6A 7064F316 933A346D 3F529252";
+
+// JCE DSA-1024 parameters derived using FIPS 186-2.
+// Seed: 8D5155894229D5E689EE01E6018A237E2CAE64CD
+// Counter: 92
+static const char *JCE_1024_P =
+    "FD7F5381 1D751229 52DF4A9C 2EECE4E7"
+    "F611B752 3CEF4400 C31E3F80 B6512669"
+    "455D4022 51FB593D 8D58FABF C5F5BA30"
+    "F6CB9B55 6CD7813B 801D346F F26660B7"
+    "6B9950A5 A49F9FE8 047B1022 C24FBBA9"
+    "D7FEB7C6 1BF83B57 E7C6A8A6 150F04FB"
+    "83F6D3C5 1EC30235 54135A16 9132F675"
+    "F3AE2B61 D72AEFF2 2203199D D14801C7";
+
+static const char *JCE_1024_Q = "9760508F 15230BCC B292B982 A2EB840B F0581CF5";
+
+static const char *JCE_1024_G =
+    "F7E1A085 D69B3DDE CBBCAB5C 36B857B9"
+    "7994AFBB FA3AEA82 F9574C0B 3D078267"
+    "5159578E BAD4594F E6710710 8180B449"
+    "167123E8 4C281613 B7CF0932 8CC8A6E1"
+    "3C167A8B 547C8D28 E0A3AE1E 2BB3A675"
+    "916EA37F 0BFA2135 62F1FB62 7A01243B"
+    "CCA4F1BE A8519089 A883DFE1 5AE59F06"
+    "928B665E 807B5525 64014C3B FECF492A";
 #endif
 
 static QByteArray dehex(const QByteArray &hex)
@@ -639,13 +838,6 @@ static BigInteger decode(const QByteArray &prime)
     return BigInteger(SecureArray(a));
 }
 
-#ifndef OPENSSL_FIPS
-static QByteArray decode_seed(const QByteArray &hex_seed)
-{
-    return dehex(hex_seed);
-}
-#endif
-
 class DLParams
 {
 public:
@@ -653,32 +845,14 @@ public:
 };
 
 #ifndef OPENSSL_FIPS
-namespace {
-static const auto DsaDeleter = [](DSA *pointer) {
-    if (pointer)
-        DSA_free((DSA *)pointer);
-};
-} // end of anonymous namespace
-
-static bool make_dlgroup(const QByteArray &seed, int bits, int counter, DLParams *params)
+static bool get_dsa_dlgroup(const QByteArray &p, const QByteArray &q, const QByteArray &g, DLParams *params)
 {
-    int                                        ret_counter;
-    std::unique_ptr<DSA, decltype(DsaDeleter)> dsa(DSA_new(), DsaDeleter);
-    if (!dsa)
+    if (!params)
         return false;
 
-    if (DSA_generate_parameters_ex(
-            dsa.get(), bits, (const unsigned char *)seed.data(), seed.size(), &ret_counter, nullptr, nullptr) != 1)
-        return false;
-
-    if (ret_counter != counter)
-        return false;
-
-    const BIGNUM *bnp, *bnq, *bng;
-    DSA_get0_pqg(dsa.get(), &bnp, &bnq, &bng);
-    params->p = bn2bi(bnp);
-    params->q = bn2bi(bnq);
-    params->g = bn2bi(bng);
+    params->p = decode(p);
+    params->q = decode(q);
+    params->g = decode(g);
 
     return true;
 }
@@ -715,15 +889,15 @@ public:
         switch (set) {
 #ifndef OPENSSL_FIPS
         case DSA_512:
-            ok = make_dlgroup(decode_seed(JCE_512_SEED), 512, JCE_512_COUNTER, &params);
+            ok = get_dsa_dlgroup(JCE_512_P, JCE_512_Q, JCE_512_G, &params);
             break;
 
         case DSA_768:
-            ok = make_dlgroup(decode_seed(JCE_768_SEED), 768, JCE_768_COUNTER, &params);
+            ok = get_dsa_dlgroup(JCE_768_P, JCE_768_Q, JCE_768_G, &params);
             break;
 
         case DSA_1024:
-            ok = make_dlgroup(decode_seed(JCE_1024_SEED), 1024, JCE_1024_COUNTER, &params);
+            ok = get_dsa_dlgroup(JCE_1024_P, JCE_1024_Q, JCE_1024_G, &params);
             break;
 #endif
 
@@ -1310,9 +1484,11 @@ public:
                 // fprintf(stderr, "experimental: private key supplied by a different provider\n");
 
                 // make a pkey pointing to the existing private key
-                EVP_PKEY *pkey;
-                pkey = EVP_PKEY_new();
-                EVP_PKEY_assign_RSA(pkey, createFromExisting(key.toRSA()));
+                EVP_PKEY *pkey = createPkeyFromExisting(key.toRSA());
+                if (!pkey) {
+                    printf("createPkeyFromExisting failed\n");
+                    return;
+                }
 
                 // make a new private key object to hold it
                 MyPKeyContext *pk = new MyPKeyContext(provider());
@@ -2066,15 +2242,9 @@ public:
         // seed the RNG if it's not seeded yet
         if (RAND_status() == 0) {
             char buf[128];
-#if QT_VERSION >= QT_VERSION_CHECK(5, 10, 0)
             auto rg = QRandomGenerator::securelySeeded();
             for (char &n : buf)
                 n = static_cast<char>(rg.bounded(256));
-#else
-            std::srand(static_cast<uint>(time(nullptr)));
-            for (char &n : buf)
-                n = static_cast<char>(std::rand());
-#endif
             RAND_seed(buf, 128);
         }
 

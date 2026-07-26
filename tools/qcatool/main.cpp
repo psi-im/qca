@@ -2711,7 +2711,13 @@ int main(int argc, char **argv)
             newpass      = val.toUtf8();
         } else if (var == QLatin1String("log-file")) {
             logFile.setFileName(val);
-            logFile.open(QIODevice::Append | QIODevice::Text | QIODevice::Unbuffered);
+            if (!logFile.open(QIODevice::Append | QIODevice::Text | QIODevice::Unbuffered)) {
+                if (!logFile.open(1, QIODevice::WriteOnly)) {
+                    qDebug("can't open any log output");
+                    return 1;
+                }
+                qWarning("can't open log file, logging to stdout instead");
+            }
             logStream.setDevice(&logFile);
         } else if (var == QLatin1String("log-level")) {
             QCA::logger()->setLevel((QCA::Logger::Severity)val.toInt());

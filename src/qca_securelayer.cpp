@@ -462,10 +462,19 @@ public:
                 emit q->certificateRequested();
             }
         } else if (a.type == Action::HostNameReceived) {
+            emitted_hostNameReceived = true;
+
+            // The provider is paused in the server-side ClientHello callback
+            // and must be invoked again after certificate selection.
+            maybe_input = true;
+
             if (connect_hostNameReceived) {
-                blocked                  = true;
-                emitted_hostNameReceived = true;
+                blocked = true;
                 emit q->hostNameReceived();
+            } else {
+                need_update = true;
+                if (!actionTrigger.isActive())
+                    actionTrigger.start();
             }
         }
     }
@@ -895,6 +904,11 @@ bool TLS::canCompress() const
 bool TLS::canSetHostName() const
 {
     return d->c->canSetHostName();
+}
+
+QString TLS::hostName() const
+{
+    return d->host;
 }
 
 bool TLS::compressionEnabled() const

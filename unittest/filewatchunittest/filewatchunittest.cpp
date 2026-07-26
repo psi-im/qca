@@ -54,7 +54,7 @@ void FileWatchUnitTest::filewatchTest()
 
     QTemporaryFile *tempFile = new QTemporaryFile;
 
-    tempFile->open();
+    QVERIFY(tempFile->open());
 
     watcher.setFileName(tempFile->fileName());
     QCOMPARE(watcher.fileName(), tempFile->fileName());
@@ -64,7 +64,7 @@ void FileWatchUnitTest::filewatchTest()
     QVERIFY(!spy.wait(2000));
     QCOMPARE(spy.count(), 0);
 
-    tempFile->open();
+    QVERIFY(tempFile->open());
     tempFile->write("foo");
     tempFile->flush();
     QVERIFY(spy.wait(2000));
@@ -74,7 +74,7 @@ void FileWatchUnitTest::filewatchTest()
     QVERIFY(!spy.wait(2000));
     QCOMPARE(spy.count(), 1);
 
-    tempFile->open();
+    QVERIFY(tempFile->open());
     tempFile->write("foo");
     tempFile->flush();
     QVERIFY(spy.wait(2000));

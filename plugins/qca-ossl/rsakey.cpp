@@ -21,9 +21,16 @@
  */
 
 #include "rsakey.h"
+#include "keyutils.h"
 #include "utils.h"
 
+#include <limits>
 #include <memory>
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+#include <openssl/core_names.h>
+#include <openssl/param_build.h>
+#endif
 
 namespace opensslQCAPlugin {
 
@@ -33,23 +40,268 @@ extern bool s_legacyProviderAvailable;
 // RSAKey
 //----------------------------------------------------------------------------
 namespace {
-static const auto RsaDeleter = [](RSA *pointer) {
-    if (pointer)
-        RSA_free((RSA *)pointer);
+static EVP_PKEY *generateRsaKey(int bits, int exp)
+{
+    if (bits <= 0 || exp <= 0)
+        return nullptr;
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    PkeyCtxPtr context(EVP_PKEY_CTX_new_from_name(nullptr, "RSA", nullptr));
+    if (!context || EVP_PKEY_keygen_init(context.get()) <= 0)
+        return nullptr;
+
+    BnClearPtr exponent(BN_new());
+    if (!exponent || BN_set_word(exponent.get(), static_cast<BN_ULONG>(exp)) != 1)
+        return nullptr;
+
+    const auto keyBits = static_cast<unsigned int>(bits);
+
+    ParamBldPtr builder(OSSL_PARAM_BLD_new());
+    if (!builder || OSSL_PARAM_BLD_push_uint(builder.get(), OSSL_PKEY_PARAM_RSA_BITS, keyBits) != 1 ||
+        OSSL_PARAM_BLD_push_BN(builder.get(), OSSL_PKEY_PARAM_RSA_E, exponent.get()) != 1)
+        return nullptr;
+
+    ParamPtr params(OSSL_PARAM_BLD_to_param(builder.get()));
+    if (!params || EVP_PKEY_CTX_set_params(context.get(), params.get()) <= 0)
+        return nullptr;
+
+    EVP_PKEY *result = nullptr;
+    if (EVP_PKEY_keygen(context.get(), &result) <= 0) {
+        EVP_PKEY_free(result);
+        return nullptr;
+    }
+    return result;
+#else
+    struct RsaDeleter
+    {
+        void operator()(RSA *pointer) const
+        {
+            RSA_free(pointer);
+        }
+    };
+
+    std::unique_ptr<RSA, RsaDeleter> rsa(RSA_new());
+    if (!rsa)
+        return nullptr;
+
+    BnClearPtr exponent(BN_new());
+    if (!exponent || BN_set_word(exponent.get(), static_cast<BN_ULONG>(exp)) != 1)
+        return nullptr;
+
+    if (RSA_generate_key_ex(rsa.get(), bits, exponent.get(), nullptr) != 1)
+        return nullptr;
+
+    EVP_PKEY *result = EVP_PKEY_new();
+    if (!result)
+        return nullptr;
+
+    if (EVP_PKEY_assign_RSA(result, rsa.get()) != 1) {
+        EVP_PKEY_free(result);
+        return nullptr;
+    }
+
+    rsa.release();
+    return result;
+#endif
+}
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+static EVP_PKEY *rsaFromParameters(const BigInteger &n,
+                                   const BigInteger &e,
+                                   const BigInteger *p,
+                                   const BigInteger *q,
+                                   const BigInteger *d)
+{
+    const bool privateKey = p && q && d;
+
+    BnClearPtr bnn(bi2bn(n));
+    BnClearPtr bne(bi2bn(e));
+    BnClearPtr bnp(privateKey ? bi2bn(*p) : nullptr);
+    BnClearPtr bnq(privateKey ? bi2bn(*q) : nullptr);
+    BnClearPtr bnd(privateKey ? bi2bn(*d) : nullptr);
+
+    if (!bnn || !bne || (privateKey && (!bnp || !bnq || !bnd)))
+        return nullptr;
+
+    if (privateKey) {
+        return pkeyFromBnParameters("RSA",
+                                    EVP_PKEY_KEYPAIR,
+                                    {{OSSL_PKEY_PARAM_RSA_N, bnn.get()},
+                                     {OSSL_PKEY_PARAM_RSA_E, bne.get()},
+                                     {OSSL_PKEY_PARAM_RSA_D, bnd.get()},
+                                     {OSSL_PKEY_PARAM_RSA_FACTOR1, bnp.get()},
+                                     {OSSL_PKEY_PARAM_RSA_FACTOR2, bnq.get()}});
+    }
+
+    return pkeyFromBnParameters(
+        "RSA", EVP_PKEY_PUBLIC_KEY, {{OSSL_PKEY_PARAM_RSA_N, bnn.get()}, {OSSL_PKEY_PARAM_RSA_E, bne.get()}});
+}
+#else
+static EVP_PKEY *rsaFromParameters(const BigInteger &n,
+                                   const BigInteger &e,
+                                   const BigInteger *p,
+                                   const BigInteger *q,
+                                   const BigInteger *d)
+{
+    const bool privateKey = p && q && d;
+
+    struct RsaDeleter
+    {
+        void operator()(RSA *pointer) const
+        {
+            RSA_free(pointer);
+        }
+    };
+
+    std::unique_ptr<RSA, RsaDeleter> rsa(RSA_new());
+    if (!rsa)
+        return nullptr;
+
+    BnClearPtr bnn(bi2bn(n));
+    BnClearPtr bne(bi2bn(e));
+    BnClearPtr bnd(privateKey ? bi2bn(*d) : nullptr);
+
+    if (!bnn || !bne || (privateKey && !bnd))
+        return nullptr;
+
+    if (RSA_set0_key(rsa.get(), bnn.get(), bne.get(), privateKey ? bnd.get() : nullptr) != 1)
+        return nullptr;
+
+    bnn.release();
+    bne.release();
+    if (privateKey)
+        bnd.release();
+
+    if (privateKey) {
+        BnClearPtr bnp(bi2bn(*p));
+        BnClearPtr bnq(bi2bn(*q));
+        if (!bnp || !bnq || RSA_set0_factors(rsa.get(), bnp.get(), bnq.get()) != 1)
+            return nullptr;
+        bnp.release();
+        bnq.release();
+
+        // Legacy OpenSSL can operate with incomplete private components only
+        // when RSA blinding is disabled.
+        if (e == BigInteger(0) || *d == BigInteger(0))
+            RSA_blinding_off(rsa.get());
+    }
+
+    EVP_PKEY *result = EVP_PKEY_new();
+    if (!result)
+        return nullptr;
+
+    if (EVP_PKEY_assign_RSA(result, rsa.get()) != 1) {
+        EVP_PKEY_free(result);
+        return nullptr;
+    }
+
+    rsa.release();
+    return result;
+}
+#endif
+
+static EVP_PKEY *rsaPublicKey(const BigInteger &n, const BigInteger &e)
+{
+    return rsaFromParameters(n, e, nullptr, nullptr, nullptr);
+}
+
+static EVP_PKEY *
+rsaPrivateKey(const BigInteger &n, const BigInteger &e, const BigInteger &p, const BigInteger &q, const BigInteger &d)
+{
+    return rsaFromParameters(n, e, &p, &q, &d);
+}
+
+enum class RsaOperation
+{
+    PublicEncrypt,
+    PrivateDecrypt,
+    PrivateEncrypt,
+    PublicDecrypt
 };
 
-static const auto BnDeleter = [](BIGNUM *pointer) {
-    if (pointer)
-        BN_free((BIGNUM *)pointer);
-};
+static int initializeRsaOperation(EVP_PKEY_CTX *context, RsaOperation operation)
+{
+    switch (operation) {
+    case RsaOperation::PublicEncrypt:
+        return EVP_PKEY_encrypt_init(context);
+    case RsaOperation::PrivateDecrypt:
+        return EVP_PKEY_decrypt_init(context);
+    case RsaOperation::PrivateEncrypt:
+        return EVP_PKEY_sign_init(context);
+    case RsaOperation::PublicDecrypt:
+        return EVP_PKEY_verify_recover_init(context);
+    }
+    return 0;
+}
+
+static int executeRsaOperation(EVP_PKEY_CTX        *context,
+                               RsaOperation         operation,
+                               unsigned char       *output,
+                               size_t              *outputSize,
+                               const unsigned char *input,
+                               size_t               inputSize)
+{
+    switch (operation) {
+    case RsaOperation::PublicEncrypt:
+        return EVP_PKEY_encrypt(context, output, outputSize, input, inputSize);
+    case RsaOperation::PrivateDecrypt:
+        return EVP_PKEY_decrypt(context, output, outputSize, input, inputSize);
+    case RsaOperation::PrivateEncrypt:
+        return EVP_PKEY_sign(context, output, outputSize, input, inputSize);
+    case RsaOperation::PublicDecrypt:
+        return EVP_PKEY_verify_recover(context, output, outputSize, input, inputSize);
+    }
+    return 0;
+}
+
+static bool
+rsaOperation(EVP_PKEY *pkey, RsaOperation operation, const SecureArray &input, int padding, SecureArray *output)
+{
+    if (!pkey || !output)
+        return false;
+
+    PkeyCtxPtr context(newPkeyContext(pkey));
+    if (!context || initializeRsaOperation(context.get(), operation) <= 0 ||
+        EVP_PKEY_CTX_set_rsa_padding(context.get(), padding) <= 0)
+        return false;
+
+    if (padding == RSA_PKCS1_OAEP_PADDING &&
+        (operation == RsaOperation::PublicEncrypt || operation == RsaOperation::PrivateDecrypt)) {
+        if (EVP_PKEY_CTX_set_rsa_oaep_md(context.get(), EVP_sha1()) <= 0 ||
+            EVP_PKEY_CTX_set_rsa_mgf1_md(context.get(), EVP_sha1()) <= 0)
+            return false;
+    }
+
+    const auto *inputData = reinterpret_cast<const unsigned char *>(input.data());
+    const auto  inputSize = static_cast<size_t>(input.size());
+
+    size_t outputSize = 0;
+    if (executeRsaOperation(context.get(), operation, nullptr, &outputSize, inputData, inputSize) <= 0 ||
+        outputSize > static_cast<size_t>(std::numeric_limits<int>::max()))
+        return false;
+
+    SecureArray result(static_cast<int>(outputSize));
+    if (executeRsaOperation(context.get(),
+                            operation,
+                            reinterpret_cast<unsigned char *>(result.data()),
+                            &outputSize,
+                            inputData,
+                            inputSize) <= 0 ||
+        outputSize > static_cast<size_t>(std::numeric_limits<int>::max()))
+        return false;
+
+    result.resize(static_cast<int>(outputSize));
+    *output = result;
+    return true;
+}
 } // end of anonymous namespace
 
 class RSAKeyMaker : public QThread
 {
     Q_OBJECT
 public:
-    RSA *result;
-    int  bits, exp;
+    EVP_PKEY *result;
+    int       bits, exp;
 
     RSAKeyMaker(int _bits, int _exp, QObject *parent = nullptr)
         : QThread(parent)
@@ -62,36 +314,19 @@ public:
     ~RSAKeyMaker() override
     {
         wait();
-        if (result)
-            RSA_free(result);
+        EVP_PKEY_free(result);
     }
 
     void run() override
     {
-        std::unique_ptr<RSA, decltype(RsaDeleter)> rsa(RSA_new(), RsaDeleter);
-        if (!rsa)
-            return;
-
-        std::unique_ptr<BIGNUM, decltype(BnDeleter)> e(BN_new(), BnDeleter);
-        if (!e)
-            return;
-
-        BN_clear(e.get());
-        if (BN_set_word(e.get(), exp) != 1)
-            return;
-
-        if (RSA_generate_key_ex(rsa.get(), bits, e.get(), nullptr) == 0) {
-            return;
-        }
-
-        result = rsa.release();
+        result = generateRsaKey(bits, exp);
     }
 
-    RSA *takeResult()
+    EVP_PKEY *takeResult()
     {
-        RSA *rsa = result;
-        result   = nullptr;
-        return rsa;
+        EVP_PKEY *pkey = result;
+        result         = nullptr;
+        return pkey;
     }
 };
 
@@ -145,20 +380,13 @@ void RSAKey::convertToPublic()
     if (!sec)
         return;
 
-    // extract the public key into DER format
-    const RSA     *rsa_pkey = EVP_PKEY_get0_RSA(evp.pkey);
-    int            len      = i2d_RSAPublicKey(rsa_pkey, nullptr);
-    SecureArray    result(len);
-    unsigned char *p = (unsigned char *)result.data();
-    i2d_RSAPublicKey(rsa_pkey, &p);
-    p = (unsigned char *)result.data();
+    EVP_PKEY *publicKey = rsaPublicKey(n(), e());
+    if (!publicKey)
+        return;
 
-    // put the DER public key back into openssl
     evp.reset();
-    RSA *rsa = d2i_RSAPublicKey(nullptr, (const unsigned char **)&p, result.size());
-    evp.pkey = EVP_PKEY_new();
-    EVP_PKEY_assign_RSA(evp.pkey, rsa);
-    sec = false;
+    evp.pkey = publicKey;
+    sec      = false;
 }
 
 int RSAKey::bits() const
@@ -168,112 +396,86 @@ int RSAKey::bits() const
 
 int RSAKey::maximumEncryptSize(EncryptionAlgorithm alg) const
 {
-    const RSA *rsa  = EVP_PKEY_get0_RSA(evp.pkey);
-    int        size = 0;
+    const int keySize = evp.pkey ? EVP_PKEY_size(evp.pkey) : 0;
+    if (keySize <= 0)
+        return 0;
+
     switch (alg) {
     case EME_PKCS1v15:
-        size = RSA_size(rsa) - 11 - 1;
-        break;
+        return keySize - 11 - 1;
     case EME_PKCS1_OAEP:
-        size = RSA_size(rsa) - 41 - 1;
-        break;
+        return keySize - 41 - 1;
     case EME_PKCS1v15_SSL:
-        size = RSA_size(rsa) - 11 - 1;
-        break;
+        return keySize - 11 - 1;
     case EME_NO_PADDING:
-        size = RSA_size(rsa) - 1;
-        break;
+        return keySize - 1;
     }
 
-    return size;
+    return 0;
 }
 
 SecureArray RSAKey::encrypt(const SecureArray &in, EncryptionAlgorithm alg)
 {
-    const RSA  *rsa = EVP_PKEY_get0_RSA(evp.pkey);
     SecureArray buf = in;
-    int         max = maximumEncryptSize(alg);
+    const int   max = maximumEncryptSize(alg);
 
+    if (max < 0)
+        return {};
     if (buf.size() > max)
         buf.resize(max);
-    SecureArray result(RSA_size(rsa));
 
-    int pad;
+    int padding = 0;
     switch (alg) {
     case EME_PKCS1v15:
-        pad = RSA_PKCS1_PADDING;
+        padding = RSA_PKCS1_PADDING;
         break;
     case EME_PKCS1_OAEP:
-        pad = RSA_PKCS1_OAEP_PADDING;
+        padding = RSA_PKCS1_OAEP_PADDING;
         break;
 #ifdef RSA_SSLV23_PADDING
     case EME_PKCS1v15_SSL:
-        pad = RSA_SSLV23_PADDING;
+        padding = RSA_SSLV23_PADDING;
         break;
 #endif
     case EME_NO_PADDING:
-        pad = RSA_NO_PADDING;
+        padding = RSA_NO_PADDING;
         break;
     default:
-        return SecureArray();
-        break;
+        return {};
     }
 
-    int ret;
-    if (isPrivate())
-        ret = RSA_private_encrypt(
-            buf.size(), (unsigned char *)buf.data(), (unsigned char *)result.data(), (RSA *)rsa, pad);
-    else
-        ret = RSA_public_encrypt(
-            buf.size(), (unsigned char *)buf.data(), (unsigned char *)result.data(), (RSA *)rsa, pad);
-
-    if (ret < 0)
-        return SecureArray();
-    result.resize(ret);
+    SecureArray        result;
+    const RsaOperation operation = isPrivate() ? RsaOperation::PrivateEncrypt : RsaOperation::PublicEncrypt;
+    if (!rsaOperation(evp.pkey, operation, buf, padding, &result))
+        return {};
 
     return result;
 }
 
 bool RSAKey::decrypt(const SecureArray &in, SecureArray *out, EncryptionAlgorithm alg)
 {
-    const RSA  *rsa = EVP_PKEY_get0_RSA(evp.pkey);
-    SecureArray result(RSA_size(rsa));
-    int         pad;
-
+    int padding = 0;
     switch (alg) {
     case EME_PKCS1v15:
-        pad = RSA_PKCS1_PADDING;
+        padding = RSA_PKCS1_PADDING;
         break;
     case EME_PKCS1_OAEP:
-        pad = RSA_PKCS1_OAEP_PADDING;
+        padding = RSA_PKCS1_OAEP_PADDING;
         break;
 #ifdef RSA_SSLV23_PADDING
     case EME_PKCS1v15_SSL:
-        pad = RSA_SSLV23_PADDING;
+        padding = RSA_SSLV23_PADDING;
         break;
 #endif
     case EME_NO_PADDING:
-        pad = RSA_NO_PADDING;
+        padding = RSA_NO_PADDING;
         break;
     default:
         return false;
-        break;
     }
 
-    int ret;
-    if (isPrivate())
-        ret =
-            RSA_private_decrypt(in.size(), (unsigned char *)in.data(), (unsigned char *)result.data(), (RSA *)rsa, pad);
-    else
-        ret =
-            RSA_public_decrypt(in.size(), (unsigned char *)in.data(), (unsigned char *)result.data(), (RSA *)rsa, pad);
-
-    if (ret < 0)
-        return false;
-    result.resize(ret);
-
-    *out = result;
-    return true;
+    const RsaOperation operation = isPrivate() ? RsaOperation::PrivateDecrypt : RsaOperation::PublicDecrypt;
+    return rsaOperation(evp.pkey, operation, in, padding, out);
 }
 
 void RSAKey::startSign(SignatureAlgorithm alg, SignatureFormat)
@@ -354,6 +556,7 @@ bool RSAKey::endVerify(const QByteArray &sig)
 void RSAKey::createPrivate(int bits, int exp, bool block)
 {
     evp.reset();
+    sec = false;
 
     keymaker    = new RSAKeyMaker(bits, exp, !block ? this : nullptr);
     wasBlocking = block;
@@ -373,93 +576,93 @@ void RSAKey::createPrivate(const BigInteger &n,
                            const BigInteger &d)
 {
     evp.reset();
+    sec = false;
 
-    RSA *rsa = RSA_new();
-    if (RSA_set0_key(rsa, bi2bn(n), bi2bn(e), bi2bn(d)) == 0 || RSA_set0_factors(rsa, bi2bn(p), bi2bn(q)) == 0) {
-        // Free BIGNUMS?
-        RSA_free(rsa);
-        return;
-    }
-
-    // When private key has no Public Exponent (e) or Private Exponent (d)
-    // need to disable blinding. Otherwise decryption will be broken.
-    // http://www.mail-archive.com/openssl-users@openssl.org/msg63530.html
-    if (e == BigInteger(0) || d == BigInteger(0))
-        RSA_blinding_off(rsa);
-
-    evp.pkey = EVP_PKEY_new();
-    EVP_PKEY_assign_RSA(evp.pkey, rsa);
-    sec = true;
+    evp.pkey = rsaPrivateKey(n, e, p, q, d);
+    if (evp.pkey)
+        sec = true;
 }
 
 void RSAKey::createPublic(const BigInteger &n, const BigInteger &e)
 {
     evp.reset();
-
-    RSA *rsa = RSA_new();
-    if (RSA_set0_key(rsa, bi2bn(n), bi2bn(e), nullptr) == 0) {
-        RSA_free(rsa);
-        return;
-    }
-
-    evp.pkey = EVP_PKEY_new();
-    EVP_PKEY_assign_RSA(evp.pkey, rsa);
     sec = false;
+
+    evp.pkey = rsaPublicKey(n, e);
 }
 
 BigInteger RSAKey::n() const
 {
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    return pkeyBnParameter(evp.pkey, OSSL_PKEY_PARAM_RSA_N, false);
+#else
     const RSA    *rsa = EVP_PKEY_get0_RSA(evp.pkey);
-    const BIGNUM *bnn;
+    const BIGNUM *bnn = nullptr;
     RSA_get0_key(rsa, &bnn, nullptr, nullptr);
     return bn2bi(bnn);
+#endif
 }
 
 BigInteger RSAKey::e() const
 {
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    return pkeyBnParameter(evp.pkey, OSSL_PKEY_PARAM_RSA_E, false);
+#else
     const RSA    *rsa = EVP_PKEY_get0_RSA(evp.pkey);
-    const BIGNUM *bne;
+    const BIGNUM *bne = nullptr;
     RSA_get0_key(rsa, nullptr, &bne, nullptr);
     return bn2bi(bne);
+#endif
 }
 
 BigInteger RSAKey::p() const
 {
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    return pkeyBnParameter(evp.pkey, OSSL_PKEY_PARAM_RSA_FACTOR1, true);
+#else
     const RSA    *rsa = EVP_PKEY_get0_RSA(evp.pkey);
-    const BIGNUM *bnp;
+    const BIGNUM *bnp = nullptr;
     RSA_get0_factors(rsa, &bnp, nullptr);
     return bn2bi(bnp);
+#endif
 }
 
 BigInteger RSAKey::q() const
 {
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    return pkeyBnParameter(evp.pkey, OSSL_PKEY_PARAM_RSA_FACTOR2, true);
+#else
     const RSA    *rsa = EVP_PKEY_get0_RSA(evp.pkey);
-    const BIGNUM *bnq;
+    const BIGNUM *bnq = nullptr;
     RSA_get0_factors(rsa, nullptr, &bnq);
     return bn2bi(bnq);
+#endif
 }
 
 BigInteger RSAKey::d() const
 {
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    return pkeyBnParameter(evp.pkey, OSSL_PKEY_PARAM_RSA_D, true);
+#else
     const RSA    *rsa = EVP_PKEY_get0_RSA(evp.pkey);
-    const BIGNUM *bnd;
+    const BIGNUM *bnd = nullptr;
     RSA_get0_key(rsa, nullptr, nullptr, &bnd);
     return bn2bi(bnd);
+#endif
 }
 
 void RSAKey::km_finished()
 {
-    RSA *rsa = keymaker->takeResult();
+    EVP_PKEY *pkey = keymaker->takeResult();
     if (wasBlocking)
         delete keymaker;
     else
         keymaker->deleteLater();
     keymaker = nullptr;
 
-    if (rsa) {
-        evp.pkey = EVP_PKEY_new();
-        EVP_PKEY_assign_RSA(evp.pkey, rsa);
-        sec = true;
+    if (pkey) {
+        evp.pkey = pkey;
+        sec      = true;
     }
 
     if (!wasBlocking)

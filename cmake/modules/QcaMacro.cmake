@@ -85,6 +85,8 @@ macro(add_qca_test TARGET DESCRIPTION)
   add_test(NAME "${DESCRIPTION}"
            WORKING_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
            COMMAND "${TARGET}")
+  set_tests_properties("${DESCRIPTION}" PROPERTIES
+                       ENVIRONMENT "QCA_PLUGIN_PATH=${CMAKE_BINARY_DIR}/lib/${QCA_LIB_NAME}")
 endmacro(add_qca_test)
 
 macro(install_pdb TARGET INSTALL_PATH)

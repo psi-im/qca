@@ -923,7 +923,7 @@ private Q_SLOTS:
             if (buf.isEmpty())
                 break;
 
-                // convert to unicode and process
+            // convert to unicode and process
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
             const QString str = codec->toUnicode(buf.data(), 1, decstate);
 #else

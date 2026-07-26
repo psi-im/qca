@@ -28,6 +28,13 @@
 
 #include <QDebug>
 
+#if QT_VERSION < QT_VERSION_CHECK(6, 9, 0)
+#define TimeZoneUTC Qt::UTC
+#else
+#include <QTimeZone>
+#define TimeZoneUTC QTimeZone::UTC
+#endif
+
 namespace opensslQCAPlugin {
 
 extern bool s_legacyProviderAvailable;
@@ -123,7 +130,8 @@ static QDateTime ASN1_UTCTIME_QDateTime(const ASN1_UTCTIME *asn1_tm)
 #else
     struct tm t;
     ASN1_TIME_to_tm(asn1_tm, &t);
-    return QDateTime(QDate(1900 + t.tm_year, t.tm_mon + 1, t.tm_mday), QTime(t.tm_hour, t.tm_min, t.tm_sec), Qt::UTC);
+    return QDateTime(
+        QDate(1900 + t.tm_year, t.tm_mon + 1, t.tm_mday), QTime(t.tm_hour, t.tm_min, t.tm_sec), TimeZoneUTC);
 #endif
 }
 
