@@ -61,9 +61,18 @@ Validity   convert_verify_error(int err);
 X509_NAME *new_cert_name(const CertificateInfo &info);
 QByteArray bio2ba(BIO *b);
 
-inline QByteArray qca_ASN1_STRING_toByteArray(ASN1_STRING *x)
+inline QByteArray qca_ASN1_STRING_toByteArray(const ASN1_STRING *x)
 {
-    return QByteArray(reinterpret_cast<const char *>(ASN1_STRING_get0_data(x)), ASN1_STRING_length(x));
+    if (!x)
+        return {};
+
+    const int            length = ASN1_STRING_length(x);
+    const unsigned char *data   = ASN1_STRING_get0_data(x);
+
+    if (length <= 0 || !data)
+        return {};
+
+    return QByteArray(reinterpret_cast<const char *>(data), length);
 }
 
 inline BIGNUM *bi2bn(const BigInteger &n)
