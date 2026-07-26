@@ -1068,12 +1068,7 @@ void MyCertContext::make_props()
     const ASN1_BIT_STRING *signature;
 
     X509_get0_signature(&signature, nullptr, x);
-    if (signature) {
-        const int byte_len = ASN1_STRING_length((const ASN1_STRING *)signature);
-        p.sig              = QByteArray(byte_len, 0);
-        for (int i = 0; i < byte_len; i++)
-            p.sig[i] = ASN1_BIT_STRING_get_bit(signature, i);
-    }
+    p.sig = qca_ASN1_STRING_toByteArray(signature);
 
     switch (X509_get_signature_nid(x)) {
     case NID_sha1WithRSAEncryption:
@@ -1591,12 +1586,7 @@ void MyCRLContext::make_props()
     const ASN1_BIT_STRING *signature;
 
     X509_CRL_get0_signature(x, &signature, nullptr);
-    if (signature) {
-        const int byte_len = ASN1_STRING_length((const ASN1_STRING *)signature);
-        p.sig              = QByteArray(byte_len, 0);
-        for (int i = 0; i < byte_len; i++)
-            p.sig[i] = ASN1_BIT_STRING_get_bit(signature, i);
-    }
+    p.sig = qca_ASN1_STRING_toByteArray(signature);
 
     switch (X509_CRL_get_signature_nid(x)) {
     case NID_sha1WithRSAEncryption:
@@ -2058,11 +2048,7 @@ void MyCSRContext::make_props()
     const ASN1_BIT_STRING *signature;
 
     X509_REQ_get0_signature(x, &signature, nullptr);
-    if (signature) {
-        p.sig = QByteArray(signature->length, 0);
-        for (int i = 0; i < signature->length; i++)
-            p.sig[i] = signature->data[i];
-    }
+    p.sig = qca_ASN1_STRING_toByteArray(signature);
 
     switch (X509_REQ_get_signature_nid(x)) {
     case NID_sha1WithRSAEncryption:
