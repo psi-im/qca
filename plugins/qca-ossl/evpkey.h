@@ -55,7 +55,9 @@ public:
 
     void        reset();
     void        startSign(const EVP_MD *type);
+    void        startSignError();
     void        startVerify(const EVP_MD *type);
+    void        startVerifyError();
     void        update(const MemoryRegion &in);
     SecureArray endSign();
     bool        endVerify(const SecureArray &sig);

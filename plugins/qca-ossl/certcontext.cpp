@@ -28,6 +28,10 @@
 
 #include <QDebug>
 
+#include <openssl/rsa.h>
+
+#include <limits>
+
 #if QT_VERSION < QT_VERSION_CHECK(6, 9, 0)
 #define TimeZoneUTC Qt::UTC
 #else
@@ -37,7 +41,283 @@
 
 namespace opensslQCAPlugin {
 
-extern bool s_legacyProviderAvailable;
+namespace {
+QCA::SignatureDigest signatureDigestFromNid(int nid)
+{
+    switch (nid) {
+#ifdef NID_md2
+    case NID_md2:
+        return QCA::SignatureDigest::MD2;
+#endif
+    case NID_md5:
+        return QCA::SignatureDigest::MD5;
+#ifdef NID_ripemd160
+    case NID_ripemd160:
+        return QCA::SignatureDigest::RIPEMD160;
+#endif
+    case NID_sha1:
+        return QCA::SignatureDigest::SHA1;
+    case NID_sha224:
+        return QCA::SignatureDigest::SHA224;
+    case NID_sha256:
+        return QCA::SignatureDigest::SHA256;
+    case NID_sha384:
+        return QCA::SignatureDigest::SHA384;
+    case NID_sha512:
+        return QCA::SignatureDigest::SHA512;
+#ifdef NID_sha512_224
+    case NID_sha512_224:
+        return QCA::SignatureDigest::SHA512_224;
+#endif
+#ifdef NID_sha512_256
+    case NID_sha512_256:
+        return QCA::SignatureDigest::SHA512_256;
+#endif
+#ifdef NID_sha3_224
+    case NID_sha3_224:
+        return QCA::SignatureDigest::SHA3_224;
+#endif
+#ifdef NID_sha3_256
+    case NID_sha3_256:
+        return QCA::SignatureDigest::SHA3_256;
+#endif
+#ifdef NID_sha3_384
+    case NID_sha3_384:
+        return QCA::SignatureDigest::SHA3_384;
+#endif
+#ifdef NID_sha3_512
+    case NID_sha3_512:
+        return QCA::SignatureDigest::SHA3_512;
+#endif
+    default:
+        return QCA::SignatureDigest::Unknown;
+    }
+}
+
+QCA::SignatureDigest signatureDigestFromX509Alg(const X509_ALGOR *algorithm)
+{
+    if (!algorithm)
+        return QCA::SignatureDigest::Unknown;
+
+    const ASN1_OBJECT *object = nullptr;
+    X509_ALGOR_get0(&object, nullptr, nullptr, algorithm);
+    return object ? signatureDigestFromNid(OBJ_obj2nid(object)) : QCA::SignatureDigest::Unknown;
+}
+
+QCA::SignatureAlgorithm signatureAlgorithmFromNid(int nid)
+{
+    using QCA::SignatureAlgorithm;
+    using QCA::SignatureDigest;
+    using QCA::SignatureScheme;
+
+    switch (nid) {
+    case NID_sha1WithRSAEncryption:
+        return {SignatureScheme::RSA_PKCS1v15, SignatureDigest::SHA1};
+    case NID_md5WithRSAEncryption:
+        return {SignatureScheme::RSA_PKCS1v15, SignatureDigest::MD5};
+#ifdef NID_md2WithRSAEncryption
+    case NID_md2WithRSAEncryption:
+        return {SignatureScheme::RSA_PKCS1v15, SignatureDigest::MD2};
+#endif
+#ifdef NID_ripemd160WithRSA
+    case NID_ripemd160WithRSA:
+        return {SignatureScheme::RSA_PKCS1v15, SignatureDigest::RIPEMD160};
+#endif
+    case NID_sha224WithRSAEncryption:
+        return {SignatureScheme::RSA_PKCS1v15, SignatureDigest::SHA224};
+    case NID_sha256WithRSAEncryption:
+        return {SignatureScheme::RSA_PKCS1v15, SignatureDigest::SHA256};
+    case NID_sha384WithRSAEncryption:
+        return {SignatureScheme::RSA_PKCS1v15, SignatureDigest::SHA384};
+    case NID_sha512WithRSAEncryption:
+        return {SignatureScheme::RSA_PKCS1v15, SignatureDigest::SHA512};
+#ifdef NID_sha512_224WithRSAEncryption
+    case NID_sha512_224WithRSAEncryption:
+        return {SignatureScheme::RSA_PKCS1v15, SignatureDigest::SHA512_224};
+#endif
+#ifdef NID_sha512_256WithRSAEncryption
+    case NID_sha512_256WithRSAEncryption:
+        return {SignatureScheme::RSA_PKCS1v15, SignatureDigest::SHA512_256};
+#endif
+#ifdef NID_RSA_SHA3_224
+    case NID_RSA_SHA3_224:
+        return {SignatureScheme::RSA_PKCS1v15, SignatureDigest::SHA3_224};
+#endif
+#ifdef NID_RSA_SHA3_256
+    case NID_RSA_SHA3_256:
+        return {SignatureScheme::RSA_PKCS1v15, SignatureDigest::SHA3_256};
+#endif
+#ifdef NID_RSA_SHA3_384
+    case NID_RSA_SHA3_384:
+        return {SignatureScheme::RSA_PKCS1v15, SignatureDigest::SHA3_384};
+#endif
+#ifdef NID_RSA_SHA3_512
+    case NID_RSA_SHA3_512:
+        return {SignatureScheme::RSA_PKCS1v15, SignatureDigest::SHA3_512};
+#endif
+    case NID_dsaWithSHA1:
+        return {SignatureScheme::DSA, SignatureDigest::SHA1};
+#ifdef NID_dsa_with_SHA224
+    case NID_dsa_with_SHA224:
+        return {SignatureScheme::DSA, SignatureDigest::SHA224};
+#endif
+#ifdef NID_dsa_with_SHA256
+    case NID_dsa_with_SHA256:
+        return {SignatureScheme::DSA, SignatureDigest::SHA256};
+#endif
+#ifdef NID_dsa_with_SHA384
+    case NID_dsa_with_SHA384:
+        return {SignatureScheme::DSA, SignatureDigest::SHA384};
+#endif
+#ifdef NID_dsa_with_SHA512
+    case NID_dsa_with_SHA512:
+        return {SignatureScheme::DSA, SignatureDigest::SHA512};
+#endif
+#ifdef NID_dsa_with_SHA3_224
+    case NID_dsa_with_SHA3_224:
+        return {SignatureScheme::DSA, SignatureDigest::SHA3_224};
+#endif
+#ifdef NID_dsa_with_SHA3_256
+    case NID_dsa_with_SHA3_256:
+        return {SignatureScheme::DSA, SignatureDigest::SHA3_256};
+#endif
+#ifdef NID_dsa_with_SHA3_384
+    case NID_dsa_with_SHA3_384:
+        return {SignatureScheme::DSA, SignatureDigest::SHA3_384};
+#endif
+#ifdef NID_dsa_with_SHA3_512
+    case NID_dsa_with_SHA3_512:
+        return {SignatureScheme::DSA, SignatureDigest::SHA3_512};
+#endif
+#ifdef NID_ecdsa_with_SHA1
+    case NID_ecdsa_with_SHA1:
+        return {SignatureScheme::ECDSA, SignatureDigest::SHA1};
+#endif
+#ifdef NID_ecdsa_with_SHA224
+    case NID_ecdsa_with_SHA224:
+        return {SignatureScheme::ECDSA, SignatureDigest::SHA224};
+#endif
+    case NID_ecdsa_with_SHA256:
+        return {SignatureScheme::ECDSA, SignatureDigest::SHA256};
+    case NID_ecdsa_with_SHA384:
+        return {SignatureScheme::ECDSA, SignatureDigest::SHA384};
+#ifdef NID_ecdsa_with_SHA512
+    case NID_ecdsa_with_SHA512:
+        return {SignatureScheme::ECDSA, SignatureDigest::SHA512};
+#endif
+#ifdef NID_ecdsa_with_SHA3_224
+    case NID_ecdsa_with_SHA3_224:
+        return {SignatureScheme::ECDSA, SignatureDigest::SHA3_224};
+#endif
+#ifdef NID_ecdsa_with_SHA3_256
+    case NID_ecdsa_with_SHA3_256:
+        return {SignatureScheme::ECDSA, SignatureDigest::SHA3_256};
+#endif
+#ifdef NID_ecdsa_with_SHA3_384
+    case NID_ecdsa_with_SHA3_384:
+        return {SignatureScheme::ECDSA, SignatureDigest::SHA3_384};
+#endif
+#ifdef NID_ecdsa_with_SHA3_512
+    case NID_ecdsa_with_SHA3_512:
+        return {SignatureScheme::ECDSA, SignatureDigest::SHA3_512};
+#endif
+#ifdef NID_ED25519
+    case NID_ED25519:
+        return {SignatureScheme::Ed25519, SignatureDigest::None};
+#endif
+#ifdef NID_ED448
+    case NID_ED448:
+        return {SignatureScheme::Ed448, SignatureDigest::None};
+#endif
+#ifdef NID_rsassaPss
+    case NID_rsassaPss:
+        return {SignatureScheme::RSA_PSS, SignatureDigest::Unknown};
+#endif
+    default:
+        return {};
+    }
+}
+
+int nonNegativeAsn1IntegerToInt(const ASN1_INTEGER *value)
+{
+    if (!value)
+        return -1;
+
+    const long decoded = ASN1_INTEGER_get(value);
+    if (decoded < 0 ||
+        static_cast<unsigned long>(decoded) > static_cast<unsigned long>(std::numeric_limits<int>::max()))
+        return -1;
+    return static_cast<int>(decoded);
+}
+
+QCA::SignatureAlgorithm signatureAlgorithmFromX509Alg(const X509_ALGOR *algorithm)
+{
+    if (!algorithm)
+        return {};
+
+    const ASN1_OBJECT *object         = nullptr;
+    int                parameterType  = V_ASN1_UNDEF;
+    const void        *parameterValue = nullptr;
+    X509_ALGOR_get0(&object, &parameterType, &parameterValue, algorithm);
+    if (!object)
+        return {};
+
+    const int nid = OBJ_obj2nid(object);
+#ifdef NID_rsassaPss
+    if (nid == NID_rsassaPss) {
+        // RFC 8017 defaults when individual RSASSA-PSS-params fields are absent.
+        QCA::SignatureDigest digest       = QCA::SignatureDigest::SHA1;
+        QCA::SignatureDigest mgfDigest    = QCA::SignatureDigest::SHA1;
+        int                  saltLength   = 20;
+        int                  trailerField = 1;
+
+        if (parameterType == V_ASN1_SEQUENCE && parameterValue) {
+            const auto          *sequence = static_cast<const ASN1_STRING *>(parameterValue);
+            const unsigned char *data     = ASN1_STRING_get0_data(sequence);
+            RSA_PSS_PARAMS      *params   = d2i_RSA_PSS_PARAMS(nullptr, &data, ASN1_STRING_length(sequence));
+            if (!params)
+                return {QCA::SignatureScheme::RSA_PSS, QCA::SignatureDigest::Unknown};
+
+            if (params->hashAlgorithm)
+                digest = signatureDigestFromX509Alg(params->hashAlgorithm);
+
+            if (params->maskGenAlgorithm) {
+                const ASN1_OBJECT *mgfObject         = nullptr;
+                int                mgfParameterType  = V_ASN1_UNDEF;
+                const void        *mgfParameterValue = nullptr;
+                X509_ALGOR_get0(&mgfObject, &mgfParameterType, &mgfParameterValue, params->maskGenAlgorithm);
+                if (!mgfObject || OBJ_obj2nid(mgfObject) != NID_mgf1 || mgfParameterType != V_ASN1_SEQUENCE ||
+                    !mgfParameterValue) {
+                    mgfDigest = QCA::SignatureDigest::Unknown;
+                } else {
+                    const auto          *mgfSequence = static_cast<const ASN1_STRING *>(mgfParameterValue);
+                    const unsigned char *mgfData     = ASN1_STRING_get0_data(mgfSequence);
+                    X509_ALGOR *mgfHashAlgorithm = d2i_X509_ALGOR(nullptr, &mgfData, ASN1_STRING_length(mgfSequence));
+                    if (mgfHashAlgorithm) {
+                        mgfDigest = signatureDigestFromX509Alg(mgfHashAlgorithm);
+                        X509_ALGOR_free(mgfHashAlgorithm);
+                    } else {
+                        mgfDigest = QCA::SignatureDigest::Unknown;
+                    }
+                }
+            }
+
+            if (params->saltLength)
+                saltLength = nonNegativeAsn1IntegerToInt(params->saltLength);
+            if (params->trailerField)
+                trailerField = nonNegativeAsn1IntegerToInt(params->trailerField);
+
+            RSA_PSS_PARAMS_free(params);
+        } else if (parameterType != V_ASN1_UNDEF && parameterType != V_ASN1_NULL) {
+            return {QCA::SignatureScheme::RSA_PSS, QCA::SignatureDigest::Unknown};
+        }
+
+        return {QCA::SignatureScheme::RSA_PSS, digest, mgfDigest, saltLength, trailerField};
+    }
+#endif
+    return signatureAlgorithmFromNid(nid);
+}
+} // namespace
 
 // If you get any more crashes in this code, please provide a copy
 // of the cert to bradh AT frogmouth.net
@@ -1065,51 +1345,12 @@ void MyCertContext::make_props()
             p.policies = get_cert_policies(ex);
     }
 
-    const ASN1_BIT_STRING *signature;
+    const ASN1_BIT_STRING *signature    = nullptr;
+    const X509_ALGOR      *signatureAlg = nullptr;
 
-    X509_get0_signature(&signature, nullptr, x);
-    p.sig = qca_ASN1_STRING_toByteArray(signature);
-
-    switch (X509_get_signature_nid(x)) {
-    case NID_sha1WithRSAEncryption:
-        p.sigalgo = QCA::EMSA3_SHA1;
-        break;
-    case NID_md5WithRSAEncryption:
-        p.sigalgo = QCA::EMSA3_MD5;
-        break;
-#ifdef HAVE_OPENSSL_MD2
-    case NID_md2WithRSAEncryption:
-        p.sigalgo = s_legacyProviderAvailable ? QCA::EMSA3_MD2 : QCA::SignatureUnknown;
-        break;
-#endif
-    case NID_ripemd160WithRSA:
-        p.sigalgo = s_legacyProviderAvailable ? QCA::EMSA3_RIPEMD160 : QCA::SignatureUnknown;
-        break;
-    case NID_dsaWithSHA1:
-        p.sigalgo = QCA::EMSA1_SHA1;
-        break;
-    case NID_sha224WithRSAEncryption:
-        p.sigalgo = QCA::EMSA3_SHA224;
-        break;
-    case NID_sha256WithRSAEncryption:
-        p.sigalgo = QCA::EMSA3_SHA256;
-        break;
-    case NID_sha384WithRSAEncryption:
-        p.sigalgo = QCA::EMSA3_SHA384;
-        break;
-    case NID_sha512WithRSAEncryption:
-        p.sigalgo = QCA::EMSA3_SHA512;
-        break;
-    case NID_ecdsa_with_SHA384:
-        p.sigalgo = QCA::EMSA3_SHA384;
-        break;
-    case NID_ecdsa_with_SHA256:
-        p.sigalgo = QCA::EMSA3_SHA256;
-        break;
-    default:
-        qDebug() << "Unknown signature value: " << X509_get_signature_nid(x);
-        p.sigalgo = QCA::SignatureUnknown;
-    }
+    X509_get0_signature(&signature, &signatureAlg, x);
+    p.sig     = qca_ASN1_STRING_toByteArray(signature);
+    p.sigalgo = signatureAlgorithmFromX509Alg(signatureAlg);
 
     pos = X509_get_ext_by_NID(x, NID_subject_key_identifier, -1);
     if (pos != -1) {
@@ -1583,45 +1824,12 @@ void MyCRLContext::make_props()
         p.revoked.append(thisEntry);
     }
 
-    const ASN1_BIT_STRING *signature;
+    const ASN1_BIT_STRING *signature    = nullptr;
+    const X509_ALGOR      *signatureAlg = nullptr;
 
-    X509_CRL_get0_signature(x, &signature, nullptr);
-    p.sig = qca_ASN1_STRING_toByteArray(signature);
-
-    switch (X509_CRL_get_signature_nid(x)) {
-    case NID_sha1WithRSAEncryption:
-        p.sigalgo = QCA::EMSA3_SHA1;
-        break;
-    case NID_md5WithRSAEncryption:
-        p.sigalgo = QCA::EMSA3_MD5;
-        break;
-#ifdef HAVE_OPENSSL_MD2
-    case NID_md2WithRSAEncryption:
-        p.sigalgo = s_legacyProviderAvailable ? QCA::EMSA3_MD2 : QCA::SignatureUnknown;
-        break;
-#endif
-    case NID_ripemd160WithRSA:
-        p.sigalgo = s_legacyProviderAvailable ? QCA::EMSA3_RIPEMD160 : QCA::SignatureUnknown;
-        break;
-    case NID_dsaWithSHA1:
-        p.sigalgo = QCA::EMSA1_SHA1;
-        break;
-    case NID_sha224WithRSAEncryption:
-        p.sigalgo = QCA::EMSA3_SHA224;
-        break;
-    case NID_sha256WithRSAEncryption:
-        p.sigalgo = QCA::EMSA3_SHA256;
-        break;
-    case NID_sha384WithRSAEncryption:
-        p.sigalgo = QCA::EMSA3_SHA384;
-        break;
-    case NID_sha512WithRSAEncryption:
-        p.sigalgo = QCA::EMSA3_SHA512;
-        break;
-    default:
-        qWarning() << "Unknown signature value: " << X509_CRL_get_signature_nid(x);
-        p.sigalgo = QCA::SignatureUnknown;
-    }
+    X509_CRL_get0_signature(x, &signature, &signatureAlg);
+    p.sig     = qca_ASN1_STRING_toByteArray(signature);
+    p.sigalgo = signatureAlgorithmFromX509Alg(signatureAlg);
 
     int pos = X509_CRL_get_ext_by_NID(x, NID_authority_key_identifier, -1);
     if (pos != -1) {
@@ -2045,33 +2253,12 @@ void MyCSRContext::make_props()
 
     sk_X509_EXTENSION_pop_free(exts, X509_EXTENSION_free);
 
-    const ASN1_BIT_STRING *signature;
+    const ASN1_BIT_STRING *signature    = nullptr;
+    const X509_ALGOR      *signatureAlg = nullptr;
 
-    X509_REQ_get0_signature(x, &signature, nullptr);
-    p.sig = qca_ASN1_STRING_toByteArray(signature);
-
-    switch (X509_REQ_get_signature_nid(x)) {
-    case NID_sha1WithRSAEncryption:
-        p.sigalgo = QCA::EMSA3_SHA1;
-        break;
-    case NID_md5WithRSAEncryption:
-        p.sigalgo = QCA::EMSA3_MD5;
-        break;
-#ifdef HAVE_OPENSSL_MD2
-    case NID_md2WithRSAEncryption:
-        p.sigalgo = QCA::EMSA3_MD2;
-        break;
-#endif
-    case NID_ripemd160WithRSA:
-        p.sigalgo = QCA::EMSA3_RIPEMD160;
-        break;
-    case NID_dsaWithSHA1:
-        p.sigalgo = QCA::EMSA1_SHA1;
-        break;
-    default:
-        qDebug() << "Unknown signature value: " << X509_REQ_get_signature_nid(x);
-        p.sigalgo = QCA::SignatureUnknown;
-    }
+    X509_REQ_get0_signature(x, &signature, &signatureAlg);
+    p.sig     = qca_ASN1_STRING_toByteArray(signature);
+    p.sigalgo = signatureAlgorithmFromX509Alg(signatureAlg);
 
     // FIXME: super hack
     CertificateOptions opts;

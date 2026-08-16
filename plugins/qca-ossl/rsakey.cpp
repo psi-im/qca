@@ -480,60 +480,40 @@ bool RSAKey::decrypt(const SecureArray &in, SecureArray *out, EncryptionAlgorith
 
 void RSAKey::startSign(SignatureAlgorithm alg, SignatureFormat)
 {
-    const EVP_MD *md = nullptr;
-    if (alg == EMSA3_SHA1)
-        md = EVP_sha1();
-    else if (alg == EMSA3_MD5)
-        md = EVP_md5();
-    else if (alg == EMSA3_SHA224)
-        md = EVP_sha224();
-    else if (alg == EMSA3_SHA256)
-        md = EVP_sha256();
-    else if (alg == EMSA3_SHA384)
-        md = EVP_sha384();
-    else if (alg == EMSA3_SHA512)
-        md = EVP_sha512();
-#ifdef HAVE_OPENSSL_BLAKE2B_512
-    else if (alg == EMSA3_BLAKE2B512) // https://tools.ietf.org/id/draft-wconner-blake2sigs-01.html
-        md = EVP_blake2b512();
-#endif
-    else if (alg == EMSA3_Raw) {
-        // md = 0
-    } else if (s_legacyProviderAvailable) {
-        if (alg == EMSA3_RIPEMD160)
-            md = EVP_ripemd160();
-#ifdef HAVE_OPENSSL_MD2
-        else if (alg == EMSA3_MD2)
-            md = EVP_md2();
-#endif
+    if (alg.scheme != SignatureScheme::RSA_PKCS1v15) {
+        evp.startSignError();
+        return;
+    }
+
+    if (alg.digest == SignatureDigest::None) {
+        evp.startSign(nullptr);
+        return;
+    }
+
+    const EVP_MD *md = signatureDigestToEvp(alg.digest, s_legacyProviderAvailable);
+    if (!md) {
+        evp.startSignError();
+        return;
     }
     evp.startSign(md);
 }
 
 void RSAKey::startVerify(SignatureAlgorithm alg, SignatureFormat)
 {
-    const EVP_MD *md = nullptr;
-    if (alg == EMSA3_SHA1)
-        md = EVP_sha1();
-    else if (alg == EMSA3_MD5)
-        md = EVP_md5();
-    else if (alg == EMSA3_SHA224)
-        md = EVP_sha224();
-    else if (alg == EMSA3_SHA256)
-        md = EVP_sha256();
-    else if (alg == EMSA3_SHA384)
-        md = EVP_sha384();
-    else if (alg == EMSA3_SHA512)
-        md = EVP_sha512();
-    else if (alg == EMSA3_Raw) {
-        // md = 0
-    } else if (s_legacyProviderAvailable) {
-        if (alg == EMSA3_RIPEMD160)
-            md = EVP_ripemd160();
-#ifdef HAVE_OPENSSL_MD2
-        else if (alg == EMSA3_MD2)
-            md = EVP_md2();
-#endif
+    if (alg.scheme != SignatureScheme::RSA_PKCS1v15) {
+        evp.startVerifyError();
+        return;
+    }
+
+    if (alg.digest == SignatureDigest::None) {
+        evp.startVerify(nullptr);
+        return;
+    }
+
+    const EVP_MD *md = signatureDigestToEvp(alg.digest, s_legacyProviderAvailable);
+    if (!md) {
+        evp.startVerifyError();
+        return;
     }
     evp.startVerify(md);
 }

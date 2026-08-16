@@ -69,6 +69,7 @@ using PkeyPtr    = std::unique_ptr<EVP_PKEY, PkeyDeleter>;
 using PkeyCtxPtr = std::unique_ptr<EVP_PKEY_CTX, PkeyCtxDeleter>;
 
 EVP_PKEY_CTX *newPkeyContext(EVP_PKEY *pkey);
+const EVP_MD *signatureDigestToEvp(QCA::SignatureDigest digest, bool legacyProviderAvailable);
 
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L
 struct ParamBldDeleter

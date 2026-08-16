@@ -38,6 +38,7 @@ private Q_SLOTS:
     void initTestCase();
     void cleanupTestCase();
     void testrsa();
+    void testSignatureAlgorithms();
     void testAsymmetricEncryption_data();
     void testAsymmetricEncryption();
 
@@ -147,6 +148,37 @@ void RSAUnitTest::testrsa()
             }
         }
     }
+}
+
+void RSAUnitTest::testSignatureAlgorithms()
+{
+    const QString provider = QStringLiteral("qca-ossl");
+    if (!QCA::isSupported("pkey", provider) || !QCA::PKey::supportedTypes(provider).contains(QCA::PKey::RSA) ||
+        !QCA::PKey::supportedIOTypes(provider).contains(QCA::PKey::RSA)) {
+        QSKIP("RSA not supported by qca-ossl");
+    }
+
+    QCA::PrivateKey privateKey = QCA::KeyGenerator().createRSA(1024, 65537, provider);
+    QVERIFY(!privateKey.isNull());
+    QCA::PublicKey publicKey = privateKey.toPublicKey();
+    QVERIFY(!publicKey.isNull());
+
+    const QCA::SecureArray  message("signature algorithm separation");
+    QCA::SignatureAlgorithm algorithm {QCA::SignatureScheme::RSA_PKCS1v15, QCA::SignatureDigest::SHA256};
+
+    const QByteArray signature = privateKey.signMessage(message, algorithm);
+    QVERIFY(!signature.isEmpty());
+    QVERIFY(publicKey.verifyMessage(message, signature, algorithm));
+
+    // The legacy constant is kept as a source-compatible alias for the new descriptor.
+    const QByteArray legacySignature = privateKey.signMessage(message, QCA::EMSA3_SHA256);
+    QVERIFY(!legacySignature.isEmpty());
+    QVERIFY(publicKey.verifyMessage(message, legacySignature, QCA::EMSA3_SHA256));
+
+    // A scheme mismatch must be rejected instead of falling through to a raw RSA operation.
+    const QCA::SignatureAlgorithm wrongScheme {QCA::SignatureScheme::DSA, QCA::SignatureDigest::SHA256};
+    QVERIFY(privateKey.signMessage(message, wrongScheme).isEmpty());
+    QVERIFY(!publicKey.verifyMessage(message, signature, wrongScheme));
 }
 
 Q_DECLARE_METATYPE(QCA::EncryptionAlgorithm)

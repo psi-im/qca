@@ -60,41 +60,114 @@ enum EncryptionAlgorithm
 };
 
 /**
-   Signature algorithm variants
+   Public-key signature schemes.
 
-   Note that most signature algorithms follow a process of first hashing the
-   plaintext data to be signed, creating a payload format that wraps the hash
-   value (among other things), and then signing the payload with the private
-   key.  So, for example, an EMSA3(SHA1) signature outputted by QCA cannot be
-   verified by merely performing RSA and SHA1 operations (e.g.
-   "openssl rsautl -verify" and comparing with sha1sum), because that would not
-   take the EMSA3 payload format into consideration.
+   The signature scheme and the message digest are represented separately.
+   This is required because the digest alone does not identify the signature
+   algorithm: for example RSA PKCS#1 v1.5 with SHA-512 and ECDSA with SHA-512
+   are different algorithms.
 */
-enum SignatureAlgorithm
+enum class SignatureScheme
 {
-    SignatureUnknown, ///< Unknown signing algorithm
-    EMSA1_SHA1,       ///< SHA1, with EMSA1 (IEEE1363-2000) encoding (this is the usual DSA algorithm - FIPS186)
-    EMSA3_SHA1,       ///< SHA1, with EMSA3 (ie PKCS#1 Version 1.5) encoding
-    EMSA3_MD5,        ///< MD5, with EMSA3 (ie PKCS#1 Version 1.5) encoding (this is the usual RSA algorithm)
-    EMSA3_MD2,        ///< MD2, with EMSA3 (ie PKCS#1 Version 1.5) encoding
-    EMSA3_RIPEMD160,  ///< RIPEMD160, with EMSA3 (ie PKCS#1 Version 1.5) encoding
-    EMSA3_Raw,        ///< EMSA3 without computing a message digest or a DigestInfo encoding (identical to PKCS#11's
-                      ///< CKM_RSA_PKCS mechanism)
-    EMSA3_SHA224,     ///< SHA224, with EMSA3 (ie PKCS#1 Version 1.5) encoding
-    EMSA3_SHA256,     ///< SHA256, with EMSA3 (ie PKCS#1 Version 1.5) encoding
-    EMSA3_SHA384,     ///< SHA384, with EMSA3 (ie PKCS#1 Version 1.5) encoding
-    EMSA3_SHA512,     ///< SHA512, with EMSA3 (ie PKCS#1 Version 1.5) encoding
-    EMSA3_BLAKE2B512, ///< BLAKE2B512, https://tools.ietf.org/id/draft-wconner-blake2sigs-01.html
+    Unknown,      ///< Unknown or unsupported signature scheme
+    RSA_PKCS1v15, ///< RSASSA-PKCS1-v1_5 (historically called EMSA3 by QCA)
+    RSA_PSS,      ///< RSASSA-PSS
+    DSA,          ///< Digital Signature Algorithm
+    ECDSA,        ///< Elliptic Curve Digital Signature Algorithm
+    Ed25519,      ///< Ed25519 (digest is intrinsic to the scheme)
+    Ed448         ///< Ed448 (digest is intrinsic to the scheme)
 };
 
 /**
-   Signature formats (DSA only)
+   Message digests used by public-key signature algorithms.
+
+   None means that no externally selectable message digest is part of the
+   QCA signature operation.  It is used for raw RSA PKCS#1 v1.5 operations and
+   for schemes such as Ed25519/Ed448 whose hashing is intrinsic to the scheme.
+*/
+enum class SignatureDigest
+{
+    Unknown,
+    None,
+    MD2,
+    MD5,
+    RIPEMD160,
+    SHA1,
+    SHA224,
+    SHA256,
+    SHA384,
+    SHA512,
+    SHA512_224,
+    SHA512_256,
+    SHA3_224,
+    SHA3_256,
+    SHA3_384,
+    SHA3_512
+};
+
+/**
+   Complete public-key signature algorithm description.
+
+   The MGF digest, salt length and trailer field are meaningful for RSA-PSS.
+   A negative integer means that the corresponding parameter is unspecified.
+*/
+struct SignatureAlgorithm
+{
+    SignatureScheme scheme       = SignatureScheme::Unknown;
+    SignatureDigest digest       = SignatureDigest::Unknown;
+    SignatureDigest mgfDigest    = SignatureDigest::Unknown;
+    int             saltLength   = -1;
+    int             trailerField = -1;
+
+    constexpr SignatureAlgorithm() = default;
+    constexpr SignatureAlgorithm(SignatureScheme scheme,
+                                 SignatureDigest digest,
+                                 SignatureDigest mgfDigest    = SignatureDigest::Unknown,
+                                 int             saltLength   = -1,
+                                 int             trailerField = -1)
+        : scheme(scheme)
+        , digest(digest)
+        , mgfDigest(mgfDigest)
+        , saltLength(saltLength)
+        , trailerField(trailerField)
+    {
+    }
+
+    constexpr bool operator==(const SignatureAlgorithm &other) const
+    {
+        return scheme == other.scheme && digest == other.digest && mgfDigest == other.mgfDigest &&
+            saltLength == other.saltLength && trailerField == other.trailerField;
+    }
+
+    constexpr bool operator!=(const SignatureAlgorithm &other) const
+    {
+        return !(*this == other);
+    }
+};
+
+// Source-compatible names for the legacy QCA signature constants.  New code
+// should construct SignatureAlgorithm from SignatureScheme and SignatureDigest.
+inline constexpr SignatureAlgorithm SignatureUnknown {};
+inline constexpr SignatureAlgorithm EMSA1_SHA1 {SignatureScheme::DSA, SignatureDigest::SHA1};
+inline constexpr SignatureAlgorithm EMSA3_SHA1 {SignatureScheme::RSA_PKCS1v15, SignatureDigest::SHA1};
+inline constexpr SignatureAlgorithm EMSA3_MD5 {SignatureScheme::RSA_PKCS1v15, SignatureDigest::MD5};
+inline constexpr SignatureAlgorithm EMSA3_MD2 {SignatureScheme::RSA_PKCS1v15, SignatureDigest::MD2};
+inline constexpr SignatureAlgorithm EMSA3_RIPEMD160 {SignatureScheme::RSA_PKCS1v15, SignatureDigest::RIPEMD160};
+inline constexpr SignatureAlgorithm EMSA3_Raw {SignatureScheme::RSA_PKCS1v15, SignatureDigest::None};
+inline constexpr SignatureAlgorithm EMSA3_SHA224 {SignatureScheme::RSA_PKCS1v15, SignatureDigest::SHA224};
+inline constexpr SignatureAlgorithm EMSA3_SHA256 {SignatureScheme::RSA_PKCS1v15, SignatureDigest::SHA256};
+inline constexpr SignatureAlgorithm EMSA3_SHA384 {SignatureScheme::RSA_PKCS1v15, SignatureDigest::SHA384};
+inline constexpr SignatureAlgorithm EMSA3_SHA512 {SignatureScheme::RSA_PKCS1v15, SignatureDigest::SHA512};
+
+/**
+   Signature representation formats for (r,s)-style signatures such as DSA
+   and ECDSA.
 */
 enum SignatureFormat
 {
-    DefaultFormat, ///< For DSA, this is the same as IEEE_1363
-    IEEE_1363,     ///< 40-byte format from IEEE 1363 (Botan/.NET)
-    DERSequence    ///< Signature wrapped in DER formatting (OpenSSL/Java)
+    DefaultFormat, ///< Provider/key-type default (IEEE_1363 for DSA)
+    IEEE_1363,     ///< Fixed-width r || s representation from IEEE 1363
+    DERSequence    ///< ASN.1 DER SEQUENCE of INTEGER r and INTEGER s
 };
 
 /**
@@ -149,16 +222,21 @@ enum DLGroupSet
 };
 
 /**
-   Encode a hash result in EMSA3 (PKCS#1) format
+   Encode a hash result using EMSA-PKCS1-v1_5.
 
    This is a convenience function for providers that only have access
    to raw RSA signing (mainly smartcard providers).  This is a built-in
-   function of QCA and does not utilize a provider.  SHA1, MD5, MD2,
-   and RIPEMD160 are supported.
+   function of QCA and does not utilize a provider.  SHA1, SHA224, SHA256,
+   SHA384, SHA512, SHA512/224, SHA512/256, MD5, MD2 and RIPEMD160 are supported.
 
    \param hashName the hash type used to create the digest
-   \param digest the digest to encode in EMSA3 format
+   \param digest the digest to encode
    \param size the desired size of the encoding output (-1 for automatic size)
+*/
+QCA_EXPORT QByteArray emsaPkcs1v15Encode(const QString &hashName, const QByteArray &digest, int size = -1);
+
+/**
+   Legacy name for emsaPkcs1v15Encode().
 */
 QCA_EXPORT QByteArray emsa3Encode(const QString &hashName, const QByteArray &digest, int size = -1);
 
@@ -643,7 +721,7 @@ public:
        Initialise the signature verification process
 
        \param alg the algorithm to use for signing
-       \param format the specific format to use, for DSA
+       \param format the signature representation format for schemes such as DSA/ECDSA
     */
     void startVerify(SignatureAlgorithm alg, SignatureFormat format = DefaultFormat);
 
@@ -662,7 +740,7 @@ public:
 // note that pubkey is a PublicKey
 if( pubkey.canVerify() )
 {
-    pubkey.startVerify( QCA::EMSA3_MD5 );
+    pubkey.startVerify( { QCA::SignatureScheme::RSA_PKCS1v15, QCA::SignatureDigest::MD5 } );
     pubkey.update( theMessage ); // might be called multiple times
     if ( pubkey.validSignature( theSignature ) )
     {
@@ -690,7 +768,7 @@ if( pubkey.canVerify() )
        \param a the message to check the signature on
        \param sig the signature to be checked
        \param alg the algorithm to use
-       \param format the signature format to use, for DSA
+       \param format the signature representation format for schemes such as DSA/ECDSA
 
        \return true if the signature is valid for the message
     */
@@ -935,7 +1013,7 @@ public:
        Initialise the message signature process
 
        \param alg the algorithm to use for the message signature process
-       \param format the signature format to use, for DSA
+       \param format the signature representation format for schemes such as DSA/ECDSA
 
        \note This synchronous operation may require event handling, and so
        it must not be called from the same thread as an EventHandler.
@@ -965,7 +1043,7 @@ public:
 
        \param a the message to sign
        \param alg the algorithm to use for the signature
-       \param format the signature format to use, for DSA
+       \param format the signature representation format for schemes such as DSA/ECDSA
 
        \return the signature
 

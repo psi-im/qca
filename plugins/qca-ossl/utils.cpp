@@ -50,7 +50,7 @@ int passphrase_cb(char *buf, int size, int rwflag, void *u)
 // QCA-based RSA_METHOD
 //----------------------------------------------------------------------------
 
-// only supports EMSA3_Raw for now
+// only supports raw RSA PKCS#1 v1.5 signing for now
 class QCA_RSA_METHOD
 {
 public:

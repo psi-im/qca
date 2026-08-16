@@ -1875,33 +1875,79 @@ static QString constraint_to_string(const QCA::ConstraintType &t)
     return t.id();
 }
 
+static QString sigdigest_to_string(QCA::SignatureDigest digest)
+{
+    switch (digest) {
+    case QCA::SignatureDigest::None:
+        return QStringLiteral("none");
+    case QCA::SignatureDigest::MD2:
+        return QStringLiteral("MD2");
+    case QCA::SignatureDigest::MD5:
+        return QStringLiteral("MD5");
+    case QCA::SignatureDigest::RIPEMD160:
+        return QStringLiteral("RIPEMD160");
+    case QCA::SignatureDigest::SHA1:
+        return QStringLiteral("SHA1");
+    case QCA::SignatureDigest::SHA224:
+        return QStringLiteral("SHA224");
+    case QCA::SignatureDigest::SHA256:
+        return QStringLiteral("SHA256");
+    case QCA::SignatureDigest::SHA384:
+        return QStringLiteral("SHA384");
+    case QCA::SignatureDigest::SHA512:
+        return QStringLiteral("SHA512");
+    case QCA::SignatureDigest::SHA512_224:
+        return QStringLiteral("SHA512/224");
+    case QCA::SignatureDigest::SHA512_256:
+        return QStringLiteral("SHA512/256");
+    case QCA::SignatureDigest::SHA3_224:
+        return QStringLiteral("SHA3-224");
+    case QCA::SignatureDigest::SHA3_256:
+        return QStringLiteral("SHA3-256");
+    case QCA::SignatureDigest::SHA3_384:
+        return QStringLiteral("SHA3-384");
+    case QCA::SignatureDigest::SHA3_512:
+        return QStringLiteral("SHA3-512");
+    case QCA::SignatureDigest::Unknown:
+        return QStringLiteral("unknown");
+    }
+    return QStringLiteral("unknown");
+}
+
 static QString sigalgo_to_string(QCA::SignatureAlgorithm algo)
 {
-    QString str;
-    switch (algo) {
-    case QCA::EMSA1_SHA1:
-        str = QStringLiteral("EMSA1(SHA1)");
+    QString scheme;
+    switch (algo.scheme) {
+    case QCA::SignatureScheme::RSA_PKCS1v15:
+        scheme = QStringLiteral("RSA-PKCS1-v1_5");
         break;
-    case QCA::EMSA3_SHA1:
-        str = QStringLiteral("EMSA3(SHA1)");
+    case QCA::SignatureScheme::RSA_PSS:
+        scheme = QStringLiteral("RSA-PSS");
         break;
-    case QCA::EMSA3_MD5:
-        str = QStringLiteral("EMSA3(MD5)");
+    case QCA::SignatureScheme::DSA:
+        scheme = QStringLiteral("DSA");
         break;
-    case QCA::EMSA3_MD2:
-        str = QStringLiteral("EMSA3(MD2)");
+    case QCA::SignatureScheme::ECDSA:
+        scheme = QStringLiteral("ECDSA");
         break;
-    case QCA::EMSA3_RIPEMD160:
-        str = QStringLiteral("EMSA3(RIPEMD160)");
-        break;
-    case QCA::EMSA3_Raw:
-        str = QStringLiteral("EMSA3(raw)");
-        break;
-    default:
-        str = QStringLiteral("Unknown");
-        break;
+    case QCA::SignatureScheme::Ed25519:
+        return QStringLiteral("Ed25519");
+    case QCA::SignatureScheme::Ed448:
+        return QStringLiteral("Ed448");
+    case QCA::SignatureScheme::Unknown:
+        return QStringLiteral("Unknown");
     }
-    return str;
+
+    QString result = scheme + QLatin1Char('(') + sigdigest_to_string(algo.digest);
+    if (algo.scheme == QCA::SignatureScheme::RSA_PSS) {
+        result += QStringLiteral(", MGF1-") + sigdigest_to_string(algo.mgfDigest);
+        if (algo.saltLength >= 0)
+            result += QStringLiteral(", salt=") + QString::number(algo.saltLength);
+        if (algo.trailerField >= 0)
+            result += QStringLiteral(", trailer=") + QString::number(algo.trailerField);
+    }
+    result += QLatin1Char(')');
+    return result;
 }
 
 static void print_cert(const QCA::Certificate &cert, bool ordered = false)

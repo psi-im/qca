@@ -57,6 +57,8 @@ private Q_SLOTS:
     void checkServerCerts();
     void altNames76();
     void sha256cert();
+    void ecdsaSha512SignatureAlgorithm();
+    void rsaPssSignatureAlgorithm();
     void crl();
     void crl2();
     void csr();
@@ -189,7 +191,7 @@ void CertUnitTest::qualitysslcatest()
             QCOMPARE(ca1.isCA(), true);
             QCOMPARE(ca1.isSelfSigned(), false);
 
-            QCOMPARE(ca1.signatureAlgorithm(), QCA::EMSA3_SHA1);
+            QVERIFY(ca1.signatureAlgorithm() == QCA::EMSA3_SHA1);
 
             QCOMPARE(ca1.serialNumber(), QCA::BigInteger("33555098"));
 
@@ -302,7 +304,7 @@ void CertUnitTest::checkExpiredClientCerts()
 
             QCOMPARE(client1.pathLimit(), 0);
 
-            QCOMPARE(client1.signatureAlgorithm(), QCA::EMSA3_MD5);
+            QVERIFY(client1.signatureAlgorithm() == QCA::EMSA3_MD5);
 
             QCA::CertificateCollection trusted;
             QCA::CertificateCollection untrusted;
@@ -417,7 +419,7 @@ void CertUnitTest::checkClientCerts()
 
             QCOMPARE(client2.pathLimit(), 0);
 
-            QCOMPARE(client2.signatureAlgorithm(), QCA::EMSA3_SHA1);
+            QVERIFY(client2.signatureAlgorithm() == QCA::EMSA3_SHA1);
 
             QCA::CertificateCollection trusted;
             QCA::CertificateCollection untrusted;
@@ -520,7 +522,7 @@ void CertUnitTest::derCAcertstest()
             // no policies on this cert
             QCOMPARE(ca1.policies().count(), 0);
 
-            QCOMPARE(ca1.signatureAlgorithm(), QCA::EMSA3_MD5);
+            QVERIFY(ca1.signatureAlgorithm() == QCA::EMSA3_MD5);
         }
     }
 }
@@ -600,7 +602,7 @@ void CertUnitTest::altName()
 
             QCOMPARE(client1.pathLimit(), 0);
 
-            QCOMPARE(client1.signatureAlgorithm(), QCA::EMSA3_SHA1);
+            QVERIFY(client1.signatureAlgorithm() == QCA::EMSA3_SHA1);
         }
     }
 }
@@ -741,7 +743,7 @@ void CertUnitTest::altNames76()
 
             QCOMPARE(client1.pathLimit(), 0);
 
-            QCOMPARE(client1.signatureAlgorithm(), QCA::EMSA3_SHA1);
+            QVERIFY(client1.signatureAlgorithm() == QCA::EMSA3_SHA1);
         }
     }
 }
@@ -778,9 +780,49 @@ void CertUnitTest::sha256cert()
 
             QCOMPARE(cert.pathLimit(), 0);
 
-            QCOMPARE(cert.signatureAlgorithm(), QCA::EMSA3_SHA256);
+            QVERIFY(cert.signatureAlgorithm() == QCA::EMSA3_SHA256); // legacy source-compatible alias
+            const QCA::SignatureAlgorithm signatureAlgorithm = cert.signatureAlgorithm();
+            QVERIFY(signatureAlgorithm.scheme == QCA::SignatureScheme::RSA_PKCS1v15);
+            QVERIFY(signatureAlgorithm.digest == QCA::SignatureDigest::SHA256);
         }
     }
+}
+
+void CertUnitTest::ecdsaSha512SignatureAlgorithm()
+{
+    const QString provider = QStringLiteral("qca-ossl");
+    if (!QCA::isSupported("cert", provider))
+        QSKIP("Certificate handling not supported by qca-ossl");
+
+    QCA::ConvertResult     result;
+    const QCA::Certificate cert =
+        QCA::Certificate::fromPEMFile(QStringLiteral("certs/ecdsa-sha512.pem"), &result, provider);
+    QCOMPARE(result, QCA::ConvertGood);
+    QVERIFY(!cert.isNull());
+
+    const QCA::SignatureAlgorithm algorithm = cert.signatureAlgorithm();
+    QVERIFY(algorithm.scheme == QCA::SignatureScheme::ECDSA);
+    QVERIFY(algorithm.digest == QCA::SignatureDigest::SHA512);
+}
+
+void CertUnitTest::rsaPssSignatureAlgorithm()
+{
+    const QString provider = QStringLiteral("qca-ossl");
+    if (!QCA::isSupported("cert", provider))
+        QSKIP("Certificate handling not supported by qca-ossl");
+
+    QCA::ConvertResult     result;
+    const QCA::Certificate cert =
+        QCA::Certificate::fromPEMFile(QStringLiteral("certs/rsa-pss-sha256.pem"), &result, provider);
+    QCOMPARE(result, QCA::ConvertGood);
+    QVERIFY(!cert.isNull());
+
+    const QCA::SignatureAlgorithm algorithm = cert.signatureAlgorithm();
+    QVERIFY(algorithm.scheme == QCA::SignatureScheme::RSA_PSS);
+    QVERIFY(algorithm.digest == QCA::SignatureDigest::SHA256);
+    QVERIFY(algorithm.mgfDigest == QCA::SignatureDigest::SHA384);
+    QCOMPARE(algorithm.saltLength, 32);
+    QCOMPARE(algorithm.trailerField, 1);
 }
 
 void CertUnitTest::checkExpiredServerCerts()
@@ -862,7 +904,7 @@ void CertUnitTest::checkExpiredServerCerts()
 
             QCOMPARE(server1.pathLimit(), 0);
 
-            QCOMPARE(server1.signatureAlgorithm(), QCA::EMSA3_MD5);
+            QVERIFY(server1.signatureAlgorithm() == QCA::EMSA3_MD5);
 
             QCA::CertificateCollection trusted;
             QCA::CertificateCollection untrusted;
@@ -972,7 +1014,7 @@ void CertUnitTest::checkServerCerts()
 
             QCOMPARE(server1.pathLimit(), 0);
 
-            QCOMPARE(server1.signatureAlgorithm(), QCA::EMSA3_SHA1);
+            QVERIFY(server1.signatureAlgorithm() == QCA::EMSA3_SHA1);
 
             QCA::CertificateCollection trusted;
             QCA::CertificateCollection untrusted;
@@ -1045,7 +1087,7 @@ void CertUnitTest::crl()
             QCOMPARE(crl1.thisUpdate(), QDateTime(QDate(2001, 8, 17), QTime(11, 12, 03), TimeZoneUTC));
             QCOMPARE(crl1.nextUpdate(), QDateTime(QDate(2006, 8, 16), QTime(11, 12, 03), TimeZoneUTC));
 
-            QCOMPARE(crl1.signatureAlgorithm(), QCA::EMSA3_MD5);
+            QVERIFY(crl1.signatureAlgorithm() == QCA::EMSA3_MD5);
 
             QCOMPARE(crl1.issuerKeyId(), QByteArray(""));
             QCOMPARE(crl1, QCA::CRL(crl1));
@@ -1101,7 +1143,7 @@ void CertUnitTest::crl2()
             QCOMPARE(crl1.thisUpdate(), QDateTime(QDate(2001, 4, 19), QTime(14, 57, 20), TimeZoneUTC));
             QCOMPARE(crl1.nextUpdate(), QDateTime(QDate(2011, 4, 19), QTime(14, 57, 20), TimeZoneUTC));
 
-            QCOMPARE(crl1.signatureAlgorithm(), QCA::EMSA3_SHA1);
+            QVERIFY(crl1.signatureAlgorithm() == QCA::EMSA3_SHA1);
 
             QCOMPARE(QCA::arrayToHex(crl1.issuerKeyId()), QStringLiteral("b72ea682cbc2c8bca87b2744d73533df9a1594c7"));
             QCOMPARE(crl1.number(), 1);
@@ -1188,7 +1230,7 @@ void CertUnitTest::csr()
                                      "074122658684367500665423564881889504308700315044585826841844654287577169905826705"
                                      "891670004942854611681809539126326134927995969418712881512819058439"));
 
-            QCOMPARE(csr1.signatureAlgorithm(), QCA::EMSA3_MD5);
+            QVERIFY(csr1.signatureAlgorithm() == QCA::EMSA3_MD5);
         }
     }
 }
@@ -1231,7 +1273,7 @@ void CertUnitTest::csr2()
                                      "796635264236530526146243919417744996366836534380790370421346490191416041004278161"
                                      "146551997010463199760480957900518811859984176646089981367745961681"));
 
-            QCOMPARE(csr1.signatureAlgorithm(), QCA::EMSA3_MD5);
+            QVERIFY(csr1.signatureAlgorithm() == QCA::EMSA3_MD5);
 
             // convert to DER
             QByteArray derCSR1 = csr1.toDER();

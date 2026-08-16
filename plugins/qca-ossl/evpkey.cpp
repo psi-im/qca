@@ -140,6 +140,13 @@ void EVPKey::startSign(const EVP_MD *type)
     }
 }
 
+void EVPKey::startSignError()
+{
+    raw_type = false;
+    raw.clear();
+    state = SignError;
+}
+
 void EVPKey::startVerify(const EVP_MD *type)
 {
     state = VerifyActive;
@@ -152,6 +159,13 @@ void EVPKey::startVerify(const EVP_MD *type)
         if (!EVP_VerifyInit_ex(mdctx, type, nullptr))
             state = VerifyError;
     }
+}
+
+void EVPKey::startVerifyError()
+{
+    raw_type = false;
+    raw.clear();
+    state = VerifyError;
 }
 
 void EVPKey::update(const MemoryRegion &in)

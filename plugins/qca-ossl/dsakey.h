@@ -30,7 +30,7 @@
 using namespace QCA;
 namespace opensslQCAPlugin {
 
-// note: DSA doesn't use SignatureAlgorithm, since EMSA1 is always assumed
+// DSA uses SignatureAlgorithm to select the digest; the scheme must be SignatureScheme::DSA.
 class DSAKeyMaker;
 class DSAKey : public DSAContext
 {

@@ -306,10 +306,12 @@ private:
         SignatureAlgorithm alg;
         Hash              *hash;
         QByteArray         raw;
+        bool               valid;
 
         _sign_data_s()
         {
-            hash = nullptr;
+            hash  = nullptr;
+            valid = false;
         }
     } _sign_data;
 
@@ -521,27 +523,63 @@ public:
         _clearSign();
 
         _sign_data.alg = alg;
-
-        switch (_sign_data.alg) {
-        case EMSA3_SHA1:
-            _sign_data.hash = new Hash(QStringLiteral("sha1"));
-            break;
-        case EMSA3_MD5:
-            _sign_data.hash = new Hash(QStringLiteral("md5"));
-            break;
-        case EMSA3_MD2:
-            _sign_data.hash = new Hash(QStringLiteral("md2"));
-            break;
-        case EMSA3_Raw:
-            break;
-        case SignatureUnknown:
-        case EMSA1_SHA1:
-        case EMSA3_RIPEMD160:
-        default:
-            QCA_logTextMessage(QString::asprintf("PKCS#11: Invalid hash algorithm %d", _sign_data.alg),
-                               Logger::Warning);
-            break;
+        if (alg.scheme != SignatureScheme::RSA_PKCS1v15) {
+            QCA_logTextMessage(
+                QString::asprintf("PKCS#11: Unsupported signature scheme %d", static_cast<int>(alg.scheme)),
+                Logger::Warning);
+            return;
         }
+
+        QString hashName;
+        switch (alg.digest) {
+        case SignatureDigest::None:
+            _sign_data.valid = true;
+            return;
+        case SignatureDigest::MD2:
+            hashName = QStringLiteral("md2");
+            break;
+        case SignatureDigest::MD5:
+            hashName = QStringLiteral("md5");
+            break;
+        case SignatureDigest::RIPEMD160:
+            hashName = QStringLiteral("ripemd160");
+            break;
+        case SignatureDigest::SHA1:
+            hashName = QStringLiteral("sha1");
+            break;
+        case SignatureDigest::SHA224:
+            hashName = QStringLiteral("sha224");
+            break;
+        case SignatureDigest::SHA256:
+            hashName = QStringLiteral("sha256");
+            break;
+        case SignatureDigest::SHA384:
+            hashName = QStringLiteral("sha384");
+            break;
+        case SignatureDigest::SHA512:
+            hashName = QStringLiteral("sha512");
+            break;
+        case SignatureDigest::Unknown:
+        case SignatureDigest::SHA512_224:
+        case SignatureDigest::SHA512_256:
+        case SignatureDigest::SHA3_224:
+        case SignatureDigest::SHA3_256:
+        case SignatureDigest::SHA3_384:
+        case SignatureDigest::SHA3_512:
+            QCA_logTextMessage(
+                QString::asprintf("PKCS#11: Unsupported signature digest %d", static_cast<int>(alg.digest)),
+                Logger::Warning);
+            return;
+        }
+
+        _sign_data.hash = new Hash(hashName);
+        if (!_sign_data.hash->context()) {
+            delete _sign_data.hash;
+            _sign_data.hash = nullptr;
+            QCA_logTextMessage(QStringLiteral("PKCS#11: Signature digest is unavailable"), Logger::Warning);
+            return;
+        }
+        _sign_data.valid = true;
     }
 
     void startVerify(SignatureAlgorithm alg, SignatureFormat sf) override
@@ -552,6 +590,8 @@ public:
     void update(const MemoryRegion &in) override
     {
         if (_has_privateKeyRole) {
+            if (!_sign_data.valid)
+                return;
             if (_sign_data.hash != nullptr) {
                 _sign_data.hash->update(in);
             } else {
@@ -565,7 +605,11 @@ public:
     QByteArray endSign() override
     {
         QByteArray result;
-        bool       session_locked = false;
+        if (!_sign_data.valid) {
+            _clearSign();
+            return result;
+        }
+        bool session_locked = false;
 
         QCA_logTextMessage(QStringLiteral("pkcs11RSAContext::endSign - entry"), Logger::Debug);
 
@@ -577,7 +621,7 @@ public:
             int myrsa_size = (_pubkey.bitSize() + 7) / 8;
 
             if (_sign_data.hash != nullptr) {
-                final = emsa3Encode(_sign_data.hash->type(), _sign_data.hash->final().toByteArray(), myrsa_size);
+                final = emsaPkcs1v15Encode(_sign_data.hash->type(), _sign_data.hash->final().toByteArray(), myrsa_size);
             } else {
                 final = _sign_data.raw;
             }
@@ -740,7 +784,8 @@ private:
     void _clearSign()
     {
         _sign_data.raw.clear();
-        _sign_data.alg = SignatureUnknown;
+        _sign_data.alg   = SignatureUnknown;
+        _sign_data.valid = false;
         delete _sign_data.hash;
         _sign_data.hash = nullptr;
     }

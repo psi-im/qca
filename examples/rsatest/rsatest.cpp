@@ -112,7 +112,7 @@ int main(int argc, char **argv)
             std::cout << "Error: this kind of key cannot sign" << std::endl;
             return 1;
         }
-        privateKey.startSign(QCA::EMSA3_MD5);
+        privateKey.startSign({QCA::SignatureScheme::RSA_PKCS1v15, QCA::SignatureDigest::MD5});
         privateKey.update(arg); // just reuse the same message
         QByteArray argSig = privateKey.signature();
 
@@ -129,7 +129,7 @@ int main(int argc, char **argv)
         // to check a signature, we must check that the key is
         // appropriate
         if (pubkey.canVerify()) {
-            pubkey.startVerify(QCA::EMSA3_MD5);
+            pubkey.startVerify({QCA::SignatureScheme::RSA_PKCS1v15, QCA::SignatureDigest::MD5});
             pubkey.update(arg);
             if (pubkey.validSignature(argSig)) {
                 std::cout << "Signature is valid" << std::endl;
@@ -140,7 +140,8 @@ int main(int argc, char **argv)
 
         // We can also do the verification in a single step if we
         // have all the message
-        if (pubkey.canVerify() && pubkey.verifyMessage(arg, argSig, QCA::EMSA3_MD5)) {
+        if (pubkey.canVerify() &&
+            pubkey.verifyMessage(arg, argSig, {QCA::SignatureScheme::RSA_PKCS1v15, QCA::SignatureDigest::MD5})) {
             std::cout << "Signature is valid" << std::endl;
         } else {
             std::cout << "Signature could not be verified" << std::endl;

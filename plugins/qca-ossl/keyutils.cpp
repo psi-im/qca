@@ -25,6 +25,64 @@ EVP_PKEY_CTX *newPkeyContext(EVP_PKEY *pkey)
 #endif
 }
 
+const EVP_MD *signatureDigestToEvp(QCA::SignatureDigest digest, bool legacyProviderAvailable)
+{
+    switch (digest) {
+    case QCA::SignatureDigest::MD2:
+#ifdef HAVE_OPENSSL_MD2
+        return legacyProviderAvailable ? EVP_md2() : nullptr;
+#else
+        return nullptr;
+#endif
+    case QCA::SignatureDigest::MD5:
+        return EVP_md5();
+    case QCA::SignatureDigest::RIPEMD160:
+        return legacyProviderAvailable ? EVP_ripemd160() : nullptr;
+    case QCA::SignatureDigest::SHA1:
+        return EVP_sha1();
+    case QCA::SignatureDigest::SHA224:
+        return EVP_sha224();
+    case QCA::SignatureDigest::SHA256:
+        return EVP_sha256();
+    case QCA::SignatureDigest::SHA384:
+        return EVP_sha384();
+    case QCA::SignatureDigest::SHA512:
+        return EVP_sha512();
+    case QCA::SignatureDigest::SHA512_224:
+        return EVP_sha512_224();
+    case QCA::SignatureDigest::SHA512_256:
+        return EVP_sha512_256();
+    case QCA::SignatureDigest::SHA3_224:
+#ifdef HAVE_OPENSSL_SHA3_224
+        return EVP_sha3_224();
+#else
+        return nullptr;
+#endif
+    case QCA::SignatureDigest::SHA3_256:
+#ifdef HAVE_OPENSSL_SHA3_256
+        return EVP_sha3_256();
+#else
+        return nullptr;
+#endif
+    case QCA::SignatureDigest::SHA3_384:
+#ifdef HAVE_OPENSSL_SHA3_384
+        return EVP_sha3_384();
+#else
+        return nullptr;
+#endif
+    case QCA::SignatureDigest::SHA3_512:
+#ifdef HAVE_OPENSSL_SHA3_512
+        return EVP_sha3_512();
+#else
+        return nullptr;
+#endif
+    case QCA::SignatureDigest::Unknown:
+    case QCA::SignatureDigest::None:
+        return nullptr;
+    }
+    return nullptr;
+}
+
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L
 EVP_PKEY *pkeyFromBnParameters(const char *algorithm, int selection, std::initializer_list<PkeyBnParameter> parameters)
 {

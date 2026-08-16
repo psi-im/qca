@@ -110,6 +110,24 @@ void DSAUnitTest::testdsa()
     QCOMPARE(fromDERkey.isPrivate(), true);
     QCOMPARE(fromDERkey.isPublic(), false);
     QVERIFY(dsaKey == fromDERkey);
+
+    QCA::PublicKey publicKey = dsaKey.toPublicKey();
+    QVERIFY(!publicKey.isNull());
+    const QCA::SecureArray        message("signature algorithm separation");
+    const QCA::SignatureAlgorithm algorithm {QCA::SignatureScheme::DSA, QCA::SignatureDigest::SHA1};
+
+    const QByteArray signature = dsaKey.signMessage(message, algorithm);
+    QVERIFY(!signature.isEmpty());
+    QVERIFY(publicKey.verifyMessage(message, signature, algorithm));
+
+    // The old EMSA1_SHA1 spelling remains source-compatible.
+    const QByteArray legacySignature = dsaKey.signMessage(message, QCA::EMSA1_SHA1);
+    QVERIFY(!legacySignature.isEmpty());
+    QVERIFY(publicKey.verifyMessage(message, legacySignature, QCA::EMSA1_SHA1));
+
+    const QCA::SignatureAlgorithm wrongScheme {QCA::SignatureScheme::RSA_PKCS1v15, QCA::SignatureDigest::SHA1};
+    QVERIFY(dsaKey.signMessage(message, wrongScheme).isEmpty());
+    QVERIFY(!publicKey.verifyMessage(message, signature, wrongScheme));
 }
 
 QTEST_MAIN(DSAUnitTest)

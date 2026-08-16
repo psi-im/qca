@@ -408,6 +408,24 @@ static const unsigned char pkcs_md2[] =
 static const unsigned char pkcs_ripemd160[] =
     {0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2B, 0x24, 0x03, 0x02, 0x01, 0x05, 0x00, 0x04, 0x14};
 
+static const unsigned char pkcs_sha224[] =
+    {0x30, 0x2D, 0x30, 0x0D, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x04, 0x05, 0x00, 0x04, 0x1C};
+
+static const unsigned char pkcs_sha256[] =
+    {0x30, 0x31, 0x30, 0x0D, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20};
+
+static const unsigned char pkcs_sha384[] =
+    {0x30, 0x41, 0x30, 0x0D, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05, 0x00, 0x04, 0x30};
+
+static const unsigned char pkcs_sha512[] =
+    {0x30, 0x51, 0x30, 0x0D, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05, 0x00, 0x04, 0x40};
+
+static const unsigned char pkcs_sha512_224[] =
+    {0x30, 0x2D, 0x30, 0x0D, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x05, 0x05, 0x00, 0x04, 0x1C};
+
+static const unsigned char pkcs_sha512_256[] =
+    {0x30, 0x31, 0x30, 0x0D, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x06, 0x05, 0x00, 0x04, 0x20};
+
 QByteArray get_hash_id(const QString &name)
 {
     if (name == QLatin1String("sha1"))
@@ -418,11 +436,23 @@ QByteArray get_hash_id(const QString &name)
         return QByteArray::fromRawData((const char *)pkcs_md2, sizeof(pkcs_md2));
     else if (name == QLatin1String("ripemd160"))
         return QByteArray::fromRawData((const char *)pkcs_ripemd160, sizeof(pkcs_ripemd160));
+    else if (name == QLatin1String("sha224"))
+        return QByteArray::fromRawData((const char *)pkcs_sha224, sizeof(pkcs_sha224));
+    else if (name == QLatin1String("sha256"))
+        return QByteArray::fromRawData((const char *)pkcs_sha256, sizeof(pkcs_sha256));
+    else if (name == QLatin1String("sha384"))
+        return QByteArray::fromRawData((const char *)pkcs_sha384, sizeof(pkcs_sha384));
+    else if (name == QLatin1String("sha512"))
+        return QByteArray::fromRawData((const char *)pkcs_sha512, sizeof(pkcs_sha512));
+    else if (name == QLatin1String("sha512-224"))
+        return QByteArray::fromRawData((const char *)pkcs_sha512_224, sizeof(pkcs_sha512_224));
+    else if (name == QLatin1String("sha512-256"))
+        return QByteArray::fromRawData((const char *)pkcs_sha512_256, sizeof(pkcs_sha512_256));
     else
         return QByteArray();
 }
 
-QByteArray emsa3Encode(const QString &hashName, const QByteArray &digest, int size)
+QByteArray emsaPkcs1v15Encode(const QString &hashName, const QByteArray &digest, int size)
 {
     const QByteArray hash_id = get_hash_id(hashName);
     if (hash_id.isEmpty())
@@ -444,6 +474,11 @@ QByteArray emsa3Encode(const QString &hashName, const QByteArray &digest, int si
     at += hash_id.size();
     memcpy(out.data() + at, digest.data(), digest.size());
     return out;
+}
+
+QByteArray emsa3Encode(const QString &hashName, const QByteArray &digest, int size)
+{
+    return emsaPkcs1v15Encode(hashName, digest, size);
 }
 
 //----------------------------------------------------------------------------

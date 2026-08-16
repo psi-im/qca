@@ -33,6 +33,8 @@
 
 namespace opensslQCAPlugin {
 
+extern bool s_legacyProviderAvailable;
+
 namespace {
 struct DsaSigDeleter
 {
@@ -336,18 +338,38 @@ int DSAKey::bits() const
     return EVP_PKEY_bits(evp.pkey);
 }
 
-void DSAKey::startSign(SignatureAlgorithm, SignatureFormat format)
+void DSAKey::startSign(SignatureAlgorithm alg, SignatureFormat format)
 {
     // OpenSSL native format is DER, so transform otherwise.
     transformsig = format != DERSequence;
-    evp.startSign(EVP_sha1());
+    if (alg.scheme != SignatureScheme::DSA || alg.digest == SignatureDigest::None) {
+        evp.startSignError();
+        return;
+    }
+
+    const EVP_MD *md = signatureDigestToEvp(alg.digest, s_legacyProviderAvailable);
+    if (!md) {
+        evp.startSignError();
+        return;
+    }
+    evp.startSign(md);
 }
 
-void DSAKey::startVerify(SignatureAlgorithm, SignatureFormat format)
+void DSAKey::startVerify(SignatureAlgorithm alg, SignatureFormat format)
 {
     // OpenSSL native format is DER, so transform otherwise.
     transformsig = format != DERSequence;
-    evp.startVerify(EVP_sha1());
+    if (alg.scheme != SignatureScheme::DSA || alg.digest == SignatureDigest::None) {
+        evp.startVerifyError();
+        return;
+    }
+
+    const EVP_MD *md = signatureDigestToEvp(alg.digest, s_legacyProviderAvailable);
+    if (!md) {
+        evp.startVerifyError();
+        return;
+    }
+    evp.startVerify(md);
 }
 
 void DSAKey::update(const MemoryRegion &in)

@@ -1640,48 +1640,13 @@ Validity Certificate::validate(const CertificateCollection &trusted,
 
 QByteArray Certificate::fingerprint(const QString &hashType) const
 {
-    const char *ht = nullptr;
-    if (hashType.isEmpty()) {
-        switch (signatureAlgorithm()) {
-        case EMSA1_SHA1:
-        case EMSA3_SHA1:
-            ht = "sha1";
-            break;
-        case EMSA3_MD5:
-            ht = "md5";
-            break;
-        case EMSA3_MD2:
-            ht = "md2";
-            break;
-        case EMSA3_RIPEMD160:
-            ht = "ripemd160";
-            break;
-        case EMSA3_SHA224:
-            ht = "sha224";
-            break;
-        case EMSA3_SHA256:
-            ht = "sha256";
-            break;
-        case EMSA3_SHA384:
-            ht = "sha384";
-            break;
-        case EMSA3_SHA512:
-            ht = "sha512";
-            break;
-        case EMSA3_BLAKE2B512:
-            ht = "blake2b_512";
-            break;
-        case EMSA3_Raw:
-        case SignatureUnknown:
-        default:
-            return QByteArray();
-        }
-    }
+    const QString ht = hashType.isEmpty() ? QStringLiteral("sha256") // RFC 8122 says sha256 is preferred
+                                          : hashType;
 
-    auto hash = QCA::Hash(ht ? QString::fromLatin1(ht) : hashType);
-    if (!hash.context()) {
-        return QByteArray(); // unsupported
-    }
+    QCA::Hash hash(ht);
+    if (!hash.context())
+        return {};
+
     hash.update(toDER());
     return hash.final().toByteArray();
 }
