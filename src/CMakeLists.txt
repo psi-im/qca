@@ -15,20 +15,15 @@ if(NOT MLOCK_TAKES_VOID)
   ADD_DEFINITIONS(-DMLOCK_NOT_VOID_PTR)
 endif()
 
-# pluginPaths() expects search roots and ProviderManager appends the
-# ABI-qualified provider subdirectory.  This prevents QCA 3 from loading QCA 2
-# providers from the same Qt plugin tree.
 if(DEVELOPER_MODE)
-  set(_qca_plugin_search_root "${CMAKE_BINARY_DIR}/lib")
+  add_definitions(-DQCA_PLUGIN_PATH="${CMAKE_BINARY_DIR}/lib/${QCA_LIB_NAME}")
 else()
   if(USE_RELATIVE_PATHS)
-    set(_qca_plugin_install_root "${QCA_PREFIX_INSTALL_DIR}/${QCA_PLUGINS_INSTALL_DIR}")
+    add_definitions(-DQCA_PLUGIN_PATH="${QCA_PREFIX_INSTALL_DIR}/${QCA_PLUGINS_INSTALL_DIR}")
   else()
-    set(_qca_plugin_install_root "${QCA_PLUGINS_INSTALL_DIR}")
+    add_definitions(-DQCA_PLUGIN_PATH="${QCA_PLUGINS_INSTALL_DIR}")
   endif()
-  get_filename_component(_qca_plugin_search_root "${_qca_plugin_install_root}" DIRECTORY)
 endif()
-add_definitions(-DQCA_PLUGIN_PATH="${_qca_plugin_search_root}")
 
 # base source files
 
@@ -131,9 +126,6 @@ ENDIF(WIN32)
 SET( SOURCES ${SOURCES} ${botan_SOURCES})
 
 add_library(${QCA_LIB_NAME} ${SOURCES}  ${public_HEADERS})
-target_compile_definitions(${QCA_LIB_NAME} PRIVATE
-  QCA_PLUGIN_SUBDIR="${QCA_LIB_NAME}/crypto"
-)
 if(NOT TARGET Qca${QCA_LIB_MAJOR_VERSION}::Qca)
   add_library(Qca${QCA_LIB_MAJOR_VERSION}::Qca ALIAS ${QCA_LIB_NAME})
 endif()
