@@ -1497,8 +1497,21 @@ DHPublicKey::DHPublicKey()
 DHPublicKey::DHPublicKey(const DLGroup &domain, const BigInteger &y, const QString &provider)
 {
     DHContext *k = static_cast<DHContext *>(getContext(QStringLiteral("dh"), provider));
+    if (!k)
+        return;
+
     k->createPublic(domain, y);
+    if (k->isNull()) {
+        delete k;
+        return;
+    }
+
     PKeyContext *c = static_cast<PKeyContext *>(getContext(QStringLiteral("pkey"), k->provider()));
+    if (!c) {
+        delete k;
+        return;
+    }
+
     c->setKey(k);
     change(c);
 }
@@ -1528,8 +1541,21 @@ DHPrivateKey::DHPrivateKey()
 DHPrivateKey::DHPrivateKey(const DLGroup &domain, const BigInteger &y, const BigInteger &x, const QString &provider)
 {
     DHContext *k = static_cast<DHContext *>(getContext(QStringLiteral("dh"), provider));
+    if (!k)
+        return;
+
     k->createPrivate(domain, y, x);
+    if (k->isNull()) {
+        delete k;
+        return;
+    }
+
     PKeyContext *c = static_cast<PKeyContext *>(getContext(QStringLiteral("pkey"), k->provider()));
+    if (!c) {
+        delete k;
+        return;
+    }
+
     c->setKey(k);
     change(c);
 }
