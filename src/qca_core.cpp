@@ -557,9 +557,9 @@ static bool configIsValid(const QVariantMap &config)
     return true;
 }
 
-static QVariantMap readConfig(const QString &name)
+static QVariantMap readConfig(const QString &name, int majorVersion)
 {
-    QSettings settings(QStringLiteral("Affinix"), QStringLiteral("QCA2"));
+    QSettings settings(QStringLiteral("Affinix"), QStringLiteral("QCA%1").arg(majorVersion));
     settings.beginGroup(QStringLiteral("ProviderConfig"));
     const QStringList providerNames = settings.value(QStringLiteral("providerNames")).toStringList();
     if (!providerNames.contains(name))
@@ -577,16 +577,24 @@ static QVariantMap readConfig(const QString &name)
     return map;
 }
 
+static QVariantMap readConfig(const QString &name)
+{
+    QVariantMap config = readConfig(name, QCA_MAJOR_VERSION);
+    if (config.isEmpty() && QCA_MAJOR_VERSION == 3)
+        config = readConfig(name, 2);
+    return config;
+}
+
 static bool writeConfig(const QString &name, const QVariantMap &config, bool systemWide = false)
 {
     QSettings settings(QSettings::NativeFormat,
                        systemWide ? QSettings::SystemScope : QSettings::UserScope,
                        QStringLiteral("Affinix"),
-                       QStringLiteral("QCA2"));
+                       QStringLiteral("QCA%1").arg(QCA_MAJOR_VERSION));
     settings.beginGroup(QStringLiteral("ProviderConfig"));
 
     // version
-    settings.setValue(QStringLiteral("version"), 2);
+    settings.setValue(QStringLiteral("version"), QCA_MAJOR_VERSION);
 
     // add the entry if needed
     QStringList providerNames = settings.value(QStringLiteral("providerNames")).toStringList();

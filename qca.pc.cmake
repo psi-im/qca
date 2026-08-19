@@ -1,7 +1,7 @@
 prefix=@QCA_PREFIX_INSTALL_DIR@
 exec_prefix=@QCA_PREFIX_INSTALL_DIR@
-libdir=@QCA_LIBRARY_INSTALL_DIR@
-includedir=@QCA_FULL_INCLUDE_INSTALL_DIR@
+libdir=@QCA_PKGCONFIG_LIBRARY_DIR@
+includedir=@QCA_PKGCONFIG_INCLUDE_DIR@
 
 Name: QCA
 Description: Qt Cryptographic Architecture library

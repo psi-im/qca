@@ -9,11 +9,11 @@ endif()
 # The cmake min. version should be set before calling project(...) too
 cmake_minimum_required(VERSION 3.16)
 
-project(qca)
+project(qca VERSION 3.0.0)
 
-set(QCA_LIB_MAJOR_VERSION "2")
-set(QCA_LIB_MINOR_VERSION "3")
-set(QCA_LIB_PATCH_VERSION "11")
+set(QCA_LIB_MAJOR_VERSION "${PROJECT_VERSION_MAJOR}")
+set(QCA_LIB_MINOR_VERSION "${PROJECT_VERSION_MINOR}")
+set(QCA_LIB_PATCH_VERSION "${PROJECT_VERSION_PATCH}")
 
 if(POLICY CMP0042)
   if(CMAKE_VERSION LESS "4.0")
@@ -92,10 +92,10 @@ include(QcaMacro)
 include(GNUInstallDirs)
 if(BUILD_WITH_QT6)
   set(QCA_QT_PC_VERSION "Qt6Core")
-  set(QCA_SUFFIX "qt6")
+  set(_qca_default_suffix "qt6")
 else()
   set(QCA_QT_PC_VERSION "Qt5Core")
-  set(QCA_SUFFIX "qt5")
+  set(_qca_default_suffix "qt5")
 endif()
 
 # QCA can be shared but plugins will be static
@@ -111,20 +111,19 @@ if(NOT LOAD_SHARED_PLUGINS)
   add_definitions(-DQCA_NO_PLUGINS)
 endif()
 
-
-set(QCA_SUFFIX "${QCA_SUFFIX}" CACHE STRING "QCA common suffix")
+set(QCA_SUFFIX "${_qca_default_suffix}" CACHE STRING "QCA common suffix")
 if(QCA_SUFFIX)
-  set(QCA_LIB_NAME qca-${QCA_SUFFIX})
-  set(QCA_TOOL_NAME qcatool-${QCA_SUFFIX})
-  set(MOZCERTS_NAME mozcerts-${QCA_SUFFIX})
-  set(QCA_PC_NAME qca2-${QCA_SUFFIX}.pc)
-  set(QCA_CONFIG_NAME_BASE "Qca-${QCA_SUFFIX}")
+  set(QCA_LIB_NAME qca${QCA_LIB_MAJOR_VERSION}-${QCA_SUFFIX})
+  set(QCA_TOOL_NAME qcatool${QCA_LIB_MAJOR_VERSION}-${QCA_SUFFIX})
+  set(MOZCERTS_NAME mozcerts${QCA_LIB_MAJOR_VERSION}-${QCA_SUFFIX})
+  set(QCA_PC_NAME qca${QCA_LIB_MAJOR_VERSION}-${QCA_SUFFIX}.pc)
+  set(QCA_CONFIG_NAME_BASE "Qca${QCA_LIB_MAJOR_VERSION}-${QCA_SUFFIX}")
 else()
-  set(QCA_LIB_NAME qca)
-  set(QCA_TOOL_NAME qcatool)
-  set(MOZCERTS_NAME mozcerts)
-  set(QCA_PC_NAME qca2.pc)
-  set(QCA_CONFIG_NAME_BASE "Qca")
+  set(QCA_LIB_NAME qca${QCA_LIB_MAJOR_VERSION})
+  set(QCA_TOOL_NAME qcatool${QCA_LIB_MAJOR_VERSION})
+  set(MOZCERTS_NAME mozcerts${QCA_LIB_MAJOR_VERSION})
+  set(QCA_PC_NAME qca${QCA_LIB_MAJOR_VERSION}.pc)
+  set(QCA_CONFIG_NAME_BASE "Qca${QCA_LIB_MAJOR_VERSION}")
 endif()
 
 set(QCA_LIB_VERSION_STRING "${QCA_LIB_MAJOR_VERSION}.${QCA_LIB_MINOR_VERSION}.${QCA_LIB_PATCH_VERSION}")
@@ -217,21 +216,17 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin" )
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib" )
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib" )
 
-if( QCA_INSTALL_IN_QT_PREFIX )
+if(QCA_INSTALL_IN_QT_PREFIX)
   setup_qt_dirs()
   set(QCA_PREFIX_INSTALL_DIR "${QT_PREFIX_DIR}" CACHE PATH "Directory where qca will install")
-  set(QCA_PLUGINS_INSTALL_DIR "${QT_PLUGINS_DIR}" CACHE PATH "Directory where qca plugins will install")
-  set(QCA_BINARY_INSTALL_DIR "${QT_BINARY_DIR}" CACHE PATH "Directory where qca plugins will install")
+  set(QCA_PLUGINS_INSTALL_DIR "${QT_PLUGINS_DIR}/${QCA_LIB_NAME}" CACHE PATH "Directory where qca plugins will install")
+  set(QCA_BINARY_INSTALL_DIR "${QT_BINARY_DIR}" CACHE PATH "Directory where qca tools will install")
   set(QCA_LIBRARY_INSTALL_DIR "${QT_LIBRARY_DIR}" CACHE PATH "Directory where qca library will install")
   set(QCA_FEATURE_INSTALL_DIR "${QT_MKSPECS_DIR}/features" CACHE PATH "Directory where qca feature file will install")
-  if(NOT QCA_SUFFIX)
-    set(QCA_INCLUDE_INSTALL_DIR "${QT_HEADERS_DIR}" CACHE PATH "Directory where qca public headers will install")
-    set(QCA_PRIVATE_INCLUDE_INSTALL_DIR "${QT_HEADERS_DIR}" CACHE PATH "Directory where qca headers will install")
-  else()
-    set(QCA_INCLUDE_INSTALL_DIR "${QT_HEADERS_DIR}/${QCA_CONFIG_NAME_BASE}" CACHE PATH "Directory where qca public headers will install")
-    set(QCA_PRIVATE_INCLUDE_INSTALL_DIR "${QT_HEADERS_DIR}/${QCA_CONFIG_NAME_BASE}" CACHE PATH "Directory where qca headers will install")
-  endif()
-  set(QCA_DOC_INSTALL_DIR "${QT_DOC_DIR}/html/qca/" CACHE PATH "Directory where qca documentation will install")
+  set(QCA_DATA_INSTALL_DIR "${QT_DATA_DIR}/${QCA_LIB_NAME}" CACHE PATH "Directory where qca data will install")
+  set(QCA_INCLUDE_INSTALL_DIR "${QT_HEADERS_DIR}/${QCA_CONFIG_NAME_BASE}" CACHE PATH "Directory where qca public headers will install")
+  set(QCA_PRIVATE_INCLUDE_INSTALL_DIR "${QT_HEADERS_DIR}/${QCA_CONFIG_NAME_BASE}" CACHE PATH "Directory where qca headers will install")
+  set(QCA_DOC_INSTALL_DIR "${QT_DOC_DIR}/html/${QCA_LIB_NAME}" CACHE PATH "Directory where qca documentation will install")
   set(QCA_MAN_INSTALL_DIR "${QT_DATA_DIR}/man" CACHE PATH "Directory where qca man pages will install")
 else()
   # Cmake says nothing about LIB_SUFFIX
@@ -241,16 +236,12 @@ else()
 
   set(QCA_PREFIX_INSTALL_DIR "${CMAKE_INSTALL_PREFIX}" CACHE PATH "Directory where qca will install")
   set(QCA_PLUGINS_INSTALL_DIR "${LIB_INSTALL_DIR}/${QCA_LIB_NAME}" CACHE PATH "Directory where qca plugins will install")
-  set(QCA_BINARY_INSTALL_DIR "${CMAKE_INSTALL_PREFIX}/bin" CACHE PATH "Directory where qca plugins will install")
+  set(QCA_BINARY_INSTALL_DIR "${CMAKE_INSTALL_PREFIX}/bin" CACHE PATH "Directory where qca tools will install")
   set(QCA_LIBRARY_INSTALL_DIR "${LIB_INSTALL_DIR}" CACHE PATH "Directory where qca library will install")
   set(QCA_FEATURE_INSTALL_DIR "${CMAKE_INSTALL_PREFIX}/mkspecs/features" CACHE PATH "Directory where qca feature file will install")
-  if(NOT QCA_SUFFIX)
-    set(QCA_INCLUDE_INSTALL_DIR "${CMAKE_INSTALL_PREFIX}/include" CACHE PATH "Directory where qca public headers will install")
-    set(QCA_PRIVATE_INCLUDE_INSTALL_DIR "${CMAKE_INSTALL_PREFIX}/include" CACHE PATH "Directory where qca headers will install")
-  else()
-    set(QCA_INCLUDE_INSTALL_DIR "${CMAKE_INSTALL_PREFIX}/include/${QCA_CONFIG_NAME_BASE}" CACHE PATH "Directory where qca public headers will install")
-    set(QCA_PRIVATE_INCLUDE_INSTALL_DIR "${CMAKE_INSTALL_PREFIX}/include/${QCA_CONFIG_NAME_BASE}" CACHE PATH "Directory where qca headers will install")
-  endif()
+  set(QCA_DATA_INSTALL_DIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/${QCA_LIB_NAME}" CACHE PATH "Directory where qca data will install")
+  set(QCA_INCLUDE_INSTALL_DIR "${CMAKE_INSTALL_PREFIX}/include/${QCA_CONFIG_NAME_BASE}" CACHE PATH "Directory where qca public headers will install")
+  set(QCA_PRIVATE_INCLUDE_INSTALL_DIR "${CMAKE_INSTALL_PREFIX}/include/${QCA_CONFIG_NAME_BASE}" CACHE PATH "Directory where qca headers will install")
   set(QCA_DOC_INSTALL_DIR "${CMAKE_INSTALL_PREFIX}/share/doc/${QCA_LIB_NAME}/html" CACHE PATH "Directory where qca documentation will install")
   set(QCA_MAN_INSTALL_DIR "${CMAKE_INSTALL_PREFIX}/share/man" CACHE PATH "Directory where qca man pages will install")
 endif()
@@ -266,6 +257,7 @@ foreach(PATH QCA_PLUGINS_INSTALL_DIR
              QCA_BINARY_INSTALL_DIR
              QCA_LIBRARY_INSTALL_DIR
              QCA_FEATURE_INSTALL_DIR
+             QCA_DATA_INSTALL_DIR
              QCA_INCLUDE_INSTALL_DIR
              QCA_PRIVATE_INCLUDE_INSTALL_DIR
              QCA_DOC_INSTALL_DIR
@@ -282,24 +274,6 @@ foreach(PATH QCA_PLUGINS_INSTALL_DIR
   endif()
 endforeach()
 
-if(NOT MSVC)
-  if(OSX_FRAMEWORK)
-    set(PKGCONFIG_CFLAGS "-F\${libdir} -I\${includedir}")
-    set(PKGCONFIG_LIBS "-F\${libdir} -framework ${QCA_LIB_NAME}")
-  else()
-    set(PKGCONFIG_CFLAGS "-I\${includedir}")
-    set(PKGCONFIG_LIBS "-L\${libdir} -l${QCA_LIB_NAME}")
-  endif()
-
-  if(NOT BUILD_WITH_QT6)
-    # qca2.pc uses absolute paths. So it must be there. Don't rellocate this.
-    configure_file("qca2.pc.cmake" "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/pkgconfig/${QCA_PC_NAME}" @ONLY)
-    if(NOT DEVELOPER_MODE)
-      install(FILES "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/pkgconfig/${QCA_PC_NAME}" DESTINATION ${PKGCONFIG_INSTALL_PREFIX})
-    endif()
-  endif()
-endif()
-
 # strip CMAKE_INSTALL_PREFIX in all paths
 if(USE_RELATIVE_PATHS)
   message(STATUS "Installed package is relocatable")
@@ -309,6 +283,7 @@ if(USE_RELATIVE_PATHS)
                QCA_BINARY_INSTALL_DIR
                QCA_LIBRARY_INSTALL_DIR
                QCA_FEATURE_INSTALL_DIR
+               QCA_DATA_INSTALL_DIR
                QCA_INCLUDE_INSTALL_DIR
                QCA_PRIVATE_INCLUDE_INSTALL_DIR
                QCA_DOC_INSTALL_DIR
@@ -326,6 +301,29 @@ if(OSX_FRAMEWORK)
   set(QCA_FULL_INCLUDE_INSTALL_DIR "${QCA_LIBRARY_INSTALL_DIR}/${QCA_LIB_NAME}.framework/Headers")
 else()
   set(QCA_FULL_INCLUDE_INSTALL_DIR "${QCA_INCLUDE_INSTALL_DIR}/QtCrypto")
+endif()
+
+if(USE_RELATIVE_PATHS)
+  set(QCA_PKGCONFIG_LIBRARY_DIR "${QCA_PREFIX_INSTALL_DIR}/${QCA_LIBRARY_INSTALL_DIR}")
+  set(QCA_PKGCONFIG_INCLUDE_DIR "${QCA_PREFIX_INSTALL_DIR}/${QCA_FULL_INCLUDE_INSTALL_DIR}")
+else()
+  set(QCA_PKGCONFIG_LIBRARY_DIR "${QCA_LIBRARY_INSTALL_DIR}")
+  set(QCA_PKGCONFIG_INCLUDE_DIR "${QCA_FULL_INCLUDE_INSTALL_DIR}")
+endif()
+
+if(NOT MSVC)
+  if(OSX_FRAMEWORK)
+    set(PKGCONFIG_CFLAGS "-F\${libdir} -I\${includedir}")
+    set(PKGCONFIG_LIBS "-F\${libdir} -framework ${QCA_LIB_NAME}")
+  else()
+    set(PKGCONFIG_CFLAGS "-I\${includedir}")
+    set(PKGCONFIG_LIBS "-L\${libdir} -l${QCA_LIB_NAME}")
+  endif()
+
+  configure_file("qca.pc.cmake" "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/pkgconfig/${QCA_PC_NAME}" @ONLY)
+  if(NOT DEVELOPER_MODE)
+    install(FILES "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/pkgconfig/${QCA_PC_NAME}" DESTINATION ${PKGCONFIG_INSTALL_PREFIX})
+  endif()
 endif()
 
 if(DEVELOPER_MODE)
@@ -374,10 +372,14 @@ else()
     message(STATUS "Found system certstore")
   else()
     message(STATUS "Using built in certstore.")
-    set(qca_CERTSTORE "${CMAKE_CURRENT_SOURCE_DIR}/certs/rootcerts.pem")
-    # note that INSTALL_FILES targets are relative to the current installation prefix...
+    set(_qca_builtin_certstore "${CMAKE_CURRENT_SOURCE_DIR}/certs/rootcerts.pem")
+    if(USE_RELATIVE_PATHS)
+      set(qca_CERTSTORE "${QCA_PREFIX_INSTALL_DIR}/${QCA_DATA_INSTALL_DIR}/certs/rootcerts.pem")
+    else()
+      set(qca_CERTSTORE "${QCA_DATA_INSTALL_DIR}/certs/rootcerts.pem")
+    endif()
     if(NOT DEVELOPER_MODE)
-      install(FILES "${qca_CERTSTORE}" DESTINATION "${QCA_PREFIX_INSTALL_DIR}/certs")
+      install(FILES "${_qca_builtin_certstore}" DESTINATION "${QCA_DATA_INSTALL_DIR}/certs")
     endif()
   endif()
   message(STATUS "certstore path: ${qca_CERTSTORE}")
@@ -410,9 +412,10 @@ set( qca_HEADERS ${private_HEADERS} ${public_HEADERS} )
 include_directories("${qca_INCLUDEDIR}/QtCrypto")
 
 if(NOT BUILD_WITH_QT6)
-  configure_file("crypto.prf.cmake" "${CMAKE_BINARY_DIR}/mkspecs/features/crypto.prf" @ONLY)
+  set(QCA_FEATURE_NAME "crypto${QCA_LIB_MAJOR_VERSION}.prf")
+  configure_file("crypto.prf.cmake" "${CMAKE_BINARY_DIR}/mkspecs/features/${QCA_FEATURE_NAME}" @ONLY)
   if(NOT DEVELOPER_MODE)
-    install(FILES "${CMAKE_BINARY_DIR}/mkspecs/features/crypto.prf" DESTINATION "${QCA_FEATURE_INSTALL_DIR}")
+    install(FILES "${CMAKE_BINARY_DIR}/mkspecs/features/${QCA_FEATURE_NAME}" DESTINATION "${QCA_FEATURE_INSTALL_DIR}")
   endif()
 endif()
 
@@ -428,9 +431,11 @@ add_subdirectory(plugins)
 
 include(GenerateExportHeader)
 generate_export_header(${QCA_LIB_NAME} BASE_NAME qca)
-install(FILES
-  ${CMAKE_CURRENT_BINARY_DIR}/qca_export.h DESTINATION ${QCA_FULL_INCLUDE_INSTALL_DIR}
-)
+if(NOT DEVELOPER_MODE)
+  install(FILES
+    ${CMAKE_CURRENT_BINARY_DIR}/qca_export.h DESTINATION ${QCA_FULL_INCLUDE_INSTALL_DIR}
+  )
+endif()
 
 if(STATIC_PLUGINS)
   # Generate header with static plugins list
@@ -469,7 +474,11 @@ configure_package_config_file(
   "${CMAKE_CURRENT_BINARY_DIR}/lib/cmake/${QCA_CONFIG_NAME_BASE}/${QCA_CONFIG_NAME_BASE}Config.cmake"
   INSTALL_DESTINATION ${QCA_LIBRARY_INSTALL_DIR}/cmake/${QCA_CONFIG_NAME_BASE}
 )
-write_basic_config_version_file("${CMAKE_CURRENT_BINARY_DIR}/lib/cmake/${QCA_CONFIG_NAME_BASE}/${QCA_CONFIG_NAME_BASE}ConfigVersion.cmake" VERSION ${QCA_LIB_VERSION_STRING} COMPATIBILITY AnyNewerVersion)
+write_basic_config_version_file(
+  "${CMAKE_CURRENT_BINARY_DIR}/lib/cmake/${QCA_CONFIG_NAME_BASE}/${QCA_CONFIG_NAME_BASE}ConfigVersion.cmake"
+  VERSION ${QCA_LIB_VERSION_STRING}
+  COMPATIBILITY SameMajorVersion
+)
 
 if(NOT DEVELOPER_MODE)
 
@@ -506,6 +515,7 @@ if(NOT DEVELOPER_MODE)
       message("Private headers will be installed to " "${QCA_PREFIX_INSTALL_DIR}/${QCA_PRIVATE_INCLUDE_INSTALL_DIR}")
     endif()
     message("Feature file will be installed to " "${QCA_PREFIX_INSTALL_DIR}/${QCA_FEATURE_INSTALL_DIR}")
+    message("Data will be installed to " "${QCA_PREFIX_INSTALL_DIR}/${QCA_DATA_INSTALL_DIR}")
     message("Documentation will be installed to " "${QCA_PREFIX_INSTALL_DIR}/${QCA_DOC_INSTALL_DIR}")
     message("Man page will be installed to " "${QCA_PREFIX_INSTALL_DIR}/${QCA_MAN_INSTALL_DIR}")
     message("Pkg-config file will be installed to " "${QCA_PREFIX_INSTALL_DIR}/${PKGCONFIG_INSTALL_PREFIX}")
@@ -521,28 +531,31 @@ if(NOT DEVELOPER_MODE)
       message("Private headers will be installed to " "${QCA_PRIVATE_INCLUDE_INSTALL_DIR}")
     endif()
     message("Feature file will be installed to " "${QCA_FEATURE_INSTALL_DIR}")
+    message("Data will be installed to " "${QCA_DATA_INSTALL_DIR}")
     message("Documentation will be installed to " "${QCA_DOC_INSTALL_DIR}")
     message("Man page will be installed to " "${QCA_MAN_INSTALL_DIR}")
     message("Pkg-config file will be installed to " "${PKGCONFIG_INSTALL_PREFIX}")
   endif()
   message("")
 
-  if(UNIX AND NOT APPLE)
-    if(NOT QCA_SUFFIX)
-
-      message("${ESCAPE}[31mYou don't have QCA_SUFFIX set. Please note that the recommended way of")
-      if(BUILD_WITH_QT6)
-        message("building Qt6 version of qca for Linux distributions is to set")
-        message("QCA_SUFFIX to qt6 (-DQCA_SUFFIX=qt6).")
-      else()
-        message("building Qt5 version of qca for Linux distributions is to set")
-        message("QCA_SUFFIX to qt5 (-DQCA_SUFFIX=qt5).")
-      endif()
-      message("${ESCAPE}[0m")
+  if(UNIX AND NOT APPLE AND NOT QCA_SUFFIX)
+    string(ASCII 27 ESCAPE)
+    message("${ESCAPE}[31mYou don't have QCA_SUFFIX set. Please note that the recommended way of")
+    if(BUILD_WITH_QT6)
+      message("building Qt6 version of qca for Linux distributions is to set")
+      message("QCA_SUFFIX to qt6 (-DQCA_SUFFIX=qt6).")
+    else()
+      message("building Qt5 version of qca for Linux distributions is to set")
+      message("QCA_SUFFIX to qt5 (-DQCA_SUFFIX=qt5).")
     endif()
+    message("${ESCAPE}[0m")
   endif()
 
-  install(EXPORT ${QCA_CONFIG_NAME_BASE}Targets DESTINATION ${QCA_LIBRARY_INSTALL_DIR}/cmake/${QCA_CONFIG_NAME_BASE} FILE ${QCA_CONFIG_NAME_BASE}Targets.cmake)
+  install(EXPORT ${QCA_CONFIG_NAME_BASE}Targets
+    DESTINATION ${QCA_LIBRARY_INSTALL_DIR}/cmake/${QCA_CONFIG_NAME_BASE}
+    FILE ${QCA_CONFIG_NAME_BASE}Targets.cmake
+    NAMESPACE Qca${QCA_LIB_MAJOR_VERSION}::
+  )
   install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/lib/cmake/${QCA_CONFIG_NAME_BASE}/${QCA_CONFIG_NAME_BASE}Config.cmake"
     "${CMAKE_CURRENT_BINARY_DIR}/lib/cmake/${QCA_CONFIG_NAME_BASE}/${QCA_CONFIG_NAME_BASE}ConfigVersion.cmake"
