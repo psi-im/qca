@@ -217,8 +217,8 @@ void init(MemoryMode mode, int prealloc)
 
     if (drop_root) {
 #if defined(Q_OS_UNIX) && !defined(Q_OS_ANDROID)
-        if (geteuid() == 0)
-            setuid(getuid());
+        if (geteuid() == 0 && setuid(getuid()) != 0)
+            qFatal("QCA: failed to drop root privileges");
 #endif
     }
 
