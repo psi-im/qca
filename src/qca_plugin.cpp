@@ -35,7 +35,10 @@
 #include <QLibrary>
 #include <QPluginLoader>
 
-#define PLUGIN_SUBDIR QStringLiteral("crypto")
+#ifndef QCA_PLUGIN_SUBDIR
+#define QCA_PLUGIN_SUBDIR "crypto"
+#endif
+#define PLUGIN_SUBDIR QStringLiteral(QCA_PLUGIN_SUBDIR)
 
 namespace QCA {
 
