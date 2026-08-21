@@ -190,6 +190,7 @@ jobs:
           ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
           qt_cmake=$(find "$QT_ROOT_DIR" -type f -name qt-cmake -print -quit)
+          chmod +x "$qt_cmake"
           "$qt_cmake" -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_WITH_QT6=ON -DBUILD_TESTS=OFF -DBUILD_TOOLS=OFF \
