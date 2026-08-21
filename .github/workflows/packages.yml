@@ -114,49 +114,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: jurplel/install-qt-action@v4
+      - uses: ./.github/actions/build-qca-desktop
         with:
-          version: ${{ env.QT_VERSION }}
-          cache: true
-      - name: Download static Cyrus SASL bundle
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir cyrus
-          asset="cyrus-sasl-${CYRUS_VERSION}-${CYRUS_REVISION}-${{ matrix.platform }}.tar.gz"
-          gh release download "$CYRUS_TAG" --repo '${{ github.repository }}' -p "$asset"
-          tar -xzf "$asset" -C cyrus
-      - name: Install OpenSSL on Windows
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: vcpkg install openssl:x64-windows
-      - name: Install OpenSSL on macOS
-        if: runner.os == 'macOS'
-        run: brew install openssl@3
-      - name: Configure Windows
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          cmake -S . -B build `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_INSTALL_PREFIX="$pwd/sdk" `
-            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
-            -DBUILD_WITH_QT6=ON -DBUILD_TESTS=OFF -DBUILD_TOOLS=ON `
-            -DBUILD_PLUGINS="ossl;cyrus-sasl" `
-            -DSasl2_ROOT="$pwd/cyrus" -DSASL2_USE_STATIC_LIBS=ON
-      - name: Configure macOS
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          cmake -S . -B build \
-            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/sdk" \
-            -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
-            -DOSX_FRAMEWORK=OFF \
-            -DBUILD_WITH_QT6=ON -DBUILD_TESTS=OFF -DBUILD_TOOLS=ON \
-            -DBUILD_PLUGINS='ossl;cyrus-sasl' \
-            -DSasl2_ROOT="$PWD/cyrus" -DSASL2_USE_STATIC_LIBS=ON
-      - run: cmake --build build --config Release
+          qt-version: ${{ env.QT_VERSION }}
+          platform: ${{ matrix.platform }}
+          cyrus-version: ${{ env.CYRUS_VERSION }}
+          cyrus-revision: ${{ env.CYRUS_REVISION }}
+          cyrus-tag: ${{ env.CYRUS_TAG }}
+          install-prefix: ${{ github.workspace }}/sdk
       - run: cmake --install build --config Release
       - name: Install bundled Cyrus SASL license
         shell: bash
@@ -212,37 +177,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: nttld/setup-ndk@v1
-        id: setup-ndk
+      - uses: ./.github/actions/build-qca-android
         with:
+          qt-version: ${{ env.QT_VERSION }}
+          qt-arch: ${{ matrix.qt_arch }}
+          abi: ${{ matrix.abi }}
           ndk-version: ${{ env.ANDROID_NDK_VERSION }}
-      - uses: jurplel/install-qt-action@v4
-        with:
-          version: ${{ env.QT_VERSION }}
-          target: android
-          arch: ${{ matrix.qt_arch }}
-          cache: true
-      - name: Download static Cyrus SASL bundle
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir cyrus
-          asset="cyrus-sasl-${CYRUS_VERSION}-${CYRUS_REVISION}-android-${{ matrix.abi }}.tar.gz"
-          gh release download "$CYRUS_TAG" --repo '${{ github.repository }}' -p "$asset"
-          tar -xzf "$asset" -C cyrus
-      - name: Configure and build
+          cyrus-version: ${{ env.CYRUS_VERSION }}
+          cyrus-revision: ${{ env.CYRUS_REVISION }}
+          cyrus-tag: ${{ env.CYRUS_TAG }}
+          install-prefix: ${{ github.workspace }}/sdk
+      - name: Install and verify SDK
         shell: bash
-        env:
-          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
-          qt_cmake=$(find "$QT_ROOT_DIR" -type f -name qt-cmake -print -quit)
-          chmod +x "$qt_cmake"
-          "$qt_cmake" -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/sdk" \
-            -DBUILD_WITH_QT6=ON -DBUILD_TESTS=OFF -DBUILD_TOOLS=OFF \
-            -DBUILD_PLUGINS='ossl;cyrus-sasl' \
-            -DSasl2_ROOT="$PWD/cyrus" -DSASL2_USE_STATIC_LIBS=ON
-          cmake --build build
           cmake --install build
           mkdir -p sdk/share/licenses/qca3/cyrus-sasl
           cp cyrus/licenses/COPYING sdk/share/licenses/qca3/cyrus-sasl/COPYING
