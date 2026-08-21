@@ -87,6 +87,7 @@ jobs:
       - run: ctest --test-dir build --output-on-failure
 
   desktop:
+    if: always() && needs.cyrus_ready.result == 'success'
     needs: cyrus_ready
     strategy:
       fail-fast: false
@@ -148,6 +149,7 @@ jobs:
           test -n "$(find build -type f -name '*qca-cyrus-sasl*' -print -quit)"
 
   android:
+    if: always() && needs.cyrus_ready.result == 'success'
     needs: cyrus_ready
     strategy:
       fail-fast: false
