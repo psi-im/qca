@@ -35,11 +35,20 @@ On macOS and Android the upstream autotools static-plugin support is used with
 `-std=gnu17` and `-fPIC`; the build also follows Gentoo's compatibility choices
 including `--disable-macos-framework`, `--disable-cmulocal`, `--disable-krb4`,
 `--with-dblib=none` and `--with-sphinx-build=no`. Cross builds explicitly set
-`CC_FOR_BUILD`. Android is pinned to NDK r27c (27.2.12479018), matching Qt 6.10. On Windows `packaging/cyrus-sasl/patch-windows-static.py` adds a real
+`CC_FOR_BUILD`. Android is pinned to NDK r27c (27.2.12479018), matching Qt 6.10.
+Because every object in these QCA bundles is intentionally PIC, source
+preparation reverts the single Gentoo avoid-PIC-overwrite change that would
+otherwise append the static mechanisms to a throw-away top-level archive rather
+than `lib/.libs/libsasl2.a`. The build checks all six required client/server
+mechanism entry points before installation.
+
+On Windows `packaging/cyrus-sasl/patch-windows-static.py` adds a real
 `libsasl2-static.lib` target to the upstream NMake build and explicitly compiles
-only `STATIC_PLAIN`, `STATIC_SCRAM` and `STATIC_DIGESTMD5`. Upstream's
-`NO_STATIC_PLUGINS` define is intentionally retained so its Windows `config.h`
-does not implicitly enable unrelated mechanisms.
+only `STATIC_PLAIN`, `STATIC_SCRAM` and `STATIC_DIGESTMD5`. It also removes the
+unused generated 64-bit `INT8`/`UINT8` aliases that collide with modern Windows
+SDK type names, after first verifying that Cyrus does not use those aliases.
+Upstream's `NO_STATIC_PLUGINS` define is intentionally retained so its Windows
+`config.h` does not implicitly enable unrelated mechanisms.
 
 Existing release assets are never overwritten. Bump `CYRUS_REVISION` whenever
 the dependency recipe changes.

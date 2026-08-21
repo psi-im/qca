@@ -9,8 +9,8 @@ on:
 env:
   QT_VERSION: 6.10.2
   CYRUS_VERSION: 2.1.28
-  CYRUS_REVISION: r3
-  CYRUS_TAG: deps-cyrus-sasl-2.1.28-r3
+  CYRUS_REVISION: r4
+  CYRUS_TAG: deps-cyrus-sasl-2.1.28-r4
   ANDROID_NDK_VERSION: r27c
 
 jobs:

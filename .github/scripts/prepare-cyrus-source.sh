@@ -86,6 +86,21 @@ for rel in ("plugins/Makefile.am", "plugins/Makefile.in"):
         out.append(line)
     path.write_text("".join(out))
 
+# Gentoo's avoid-PIC-overwrite patch deliberately appends static plug-in
+# objects to the non-PIC top-level archive. Our bundle is PIC-only because
+# it is linked into the qca-cyrus-sasl module, while libtool consumers and
+# install use .libs/libsasl2.a. Put the static mechanisms back into that
+# actual PIC archive.
+lib_makefile = src / "lib/Makefile.am"
+text = lib_makefile.read_text()
+old = "\t$(AR) cru $@ $(SASL_STATIC_OBJS)\n"
+new = "\t$(AR) cru .libs/$@ $(SASL_STATIC_OBJS)\n"
+if text.count(old) != 1:
+    raise SystemExit(
+        f"{lib_makefile}: expected exactly one Gentoo static-archive recipe"
+    )
+lib_makefile.write_text(text.replace(old, new))
+
 configure = src / "configure.ac"
 text = configure.read_text()
 configure.write_text(text.replace("AC_CONFIG_MACRO_DIR(", "AC_CONFIG_MACRO_DIRS("))

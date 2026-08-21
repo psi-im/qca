@@ -10,7 +10,6 @@ mkdir -p "$prefix"
 configure_args=(
   "--prefix=$prefix"
   --enable-static
-  --with-threads=pthread
   --disable-shared
   --enable-plain
   --enable-scram
@@ -24,7 +23,6 @@ configure_args=(
   --disable-sample
   --disable-sql
   --disable-gssapi
-  --disable-gs2
   --disable-cmulocal
   --disable-krb4
   --disable-macos-framework
@@ -47,7 +45,38 @@ pushd "$src"
 # Gentoo pins C17 because Cyrus SASL 2.1.28 does not build cleanly as C23.
 # PIC is required because this archive is linked into a QCA shared/module plugin.
 CFLAGS="${CFLAGS:-} -std=gnu17 -fPIC" ./configure "${configure_args[@]}"
-make -j"${CMAKE_BUILD_PARALLEL_LEVEL:-2}"
+# Cyrus SASL 2.1.28 is not reliably parallel-build safe. This dependency is
+# built once per immutable bundle revision, so prefer correctness here.
+make
+
+archive=lib/.libs/libsasl2.a
+if [[ ! -f "$archive" ]]; then
+  echo "Static Cyrus SASL archive was not produced: $archive" >&2
+  exit 1
+fi
+
+# Fail here rather than later in QCA if the static plug-in registry references
+# mechanisms that were not actually embedded in libsasl2.a.
+nm_bin=${NM:-nm}
+for symbol in \
+  plain_client_plug_init plain_server_plug_init \
+  scram_client_plug_init scram_server_plug_init \
+  digestmd5_client_plug_init digestmd5_server_plug_init; do
+  if ! "$nm_bin" -g "$archive" 2>/dev/null | awk -v wanted="$symbol" '
+    {
+      name = $NF
+      type = $(NF - 1)
+      sub(/^_/, "", name)
+      if (name == wanted && type == "T")
+        found = 1
+    }
+    END { exit found ? 0 : 1 }
+  '; then
+    echo "Static Cyrus SASL archive is missing definition of $symbol" >&2
+    exit 1
+  fi
+done
+
 make install
 popd
 
