@@ -54,3 +54,20 @@ consumer CI:
 The packaging jobs require both `qca-ossl` and `qca-cyrus-sasl`. Non-Linux
 jobs also verify that `qca-cyrus-sasl` has no shared Cyrus SASL runtime
 dependency.
+
+
+## Bootstrap order
+
+The static Cyrus SASL release is intentionally independent of normal QCA CI.
+After changing the Cyrus version or bundle revision, run **Cyrus SASL dependency bundles** once.
+`ci.yml` and `packages.yml` perform a single preflight check before starting the desktop/Android matrices;
+if the release or an asset is missing they stop with an explicit bootstrap message instead of failing every platform job.
+
+
+## Automatic dependency bootstrap
+
+`deps-cyrus-sasl.yml` is both manually runnable and a reusable workflow.
+`packages.yml` calls it before desktop/Android packaging. Existing release assets are reused; only missing assets are built and uploaded.
+The normal CI does the same on trusted `push`/manual runs. Pull-request runs intentionally perform a read-only availability check instead of granting release-write permissions to PR code.
+
+The dependency workflow is concurrency-serialized, so simultaneous CI/package runs cannot intentionally rebuild the same dependency set in parallel. Bump `CYRUS_REVISION` when the dependency recipe changes.

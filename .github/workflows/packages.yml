@@ -13,6 +13,11 @@ env:
   ANDROID_NDK_VERSION: r27c
 
 jobs:
+  ensure_cyrus_bundles:
+    uses: ./.github/workflows/deps-cyrus-sasl.yml
+    permissions:
+      contents: write
+
   debian:
     runs-on: ubuntu-24.04
     steps:
@@ -95,6 +100,7 @@ jobs:
           path: debs/*.deb
 
   desktop-sdk:
+    needs: ensure_cyrus_bundles
     strategy:
       fail-fast: false
       matrix:
@@ -192,6 +198,7 @@ jobs:
           path: qca3-qt6-${{ matrix.platform }}.tar.gz
 
   android-sdk:
+    needs: ensure_cyrus_bundles
     strategy:
       fail-fast: false
       matrix:

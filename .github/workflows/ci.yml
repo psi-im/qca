@@ -14,6 +14,64 @@ env:
   ANDROID_NDK_VERSION: r27c
 
 jobs:
+  ensure_cyrus_bundles:
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/deps-cyrus-sasl.yml
+    permissions:
+      contents: write
+
+  check_cyrus_bundles_pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Verify prebuilt Cyrus SASL dependency bundles
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          expected=(
+            "cyrus-sasl-${CYRUS_VERSION}-${CYRUS_REVISION}-windows-x64.tar.gz"
+            "cyrus-sasl-${CYRUS_VERSION}-${CYRUS_REVISION}-macos-arm64.tar.gz"
+            "cyrus-sasl-${CYRUS_VERSION}-${CYRUS_REVISION}-macos-x86_64.tar.gz"
+            "cyrus-sasl-${CYRUS_VERSION}-${CYRUS_REVISION}-android-arm64-v8a.tar.gz"
+            "cyrus-sasl-${CYRUS_VERSION}-${CYRUS_REVISION}-android-armeabi-v7a.tar.gz"
+            "cyrus-sasl-${CYRUS_VERSION}-${CYRUS_REVISION}-android-x86_64.tar.gz"
+            "cyrus-sasl-${CYRUS_VERSION}-${CYRUS_REVISION}-android-x86.tar.gz"
+          )
+          if ! gh release view "$CYRUS_TAG" --repo '${{ github.repository }}' >/dev/null 2>&1; then
+            echo "::error::Required dependency release '$CYRUS_TAG' does not exist yet. Merge/run CI on the trusted branch once so it can bootstrap the dependency bundles."
+            exit 1
+          fi
+          assets=$(gh release view "$CYRUS_TAG" --repo '${{ github.repository }}' --json assets --jq '.assets[].name')
+          missing=0
+          for asset in "${expected[@]}"; do
+            if ! grep -Fxq "$asset" <<<"$assets"; then
+              echo "::error::Missing Cyrus SASL dependency asset: $asset"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+  cyrus_ready:
+    if: always()
+    needs: [ensure_cyrus_bundles, check_cyrus_bundles_pr]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require Cyrus dependency preparation
+        shell: bash
+        env:
+          ENSURE_RESULT: ${{ needs.ensure_cyrus_bundles.result }}
+          CHECK_RESULT: ${{ needs.check_cyrus_bundles_pr.result }}
+        run: |
+          if [[ "$ENSURE_RESULT" == success || "$CHECK_RESULT" == success ]]; then
+            exit 0
+          fi
+          echo "::error::Cyrus SASL dependency bundles are not available."
+          exit 1
+
   linux:
     runs-on: ubuntu-24.04
     steps:
@@ -29,6 +87,7 @@ jobs:
       - run: ctest --test-dir build --output-on-failure
 
   desktop:
+    needs: cyrus_ready
     strategy:
       fail-fast: false
       matrix:
@@ -91,6 +150,7 @@ jobs:
           test -n "$(find build -type f -name '*qca-cyrus-sasl*' -print -quit)"
 
   android:
+    needs: cyrus_ready
     strategy:
       fail-fast: false
       matrix:
