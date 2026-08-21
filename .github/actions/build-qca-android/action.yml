@@ -1,0 +1,72 @@
+name: Build QCA for Android
+description: Configure and build QCA with the private static Cyrus SASL bundle
+
+inputs:
+  qt-version:
+    description: Qt version
+    required: true
+  qt-arch:
+    description: Qt Android architecture name
+    required: true
+  abi:
+    description: Android ABI name used by the Cyrus bundle
+    required: true
+  ndk-version:
+    description: Android NDK version
+    required: true
+  cyrus-version:
+    description: Cyrus SASL version
+    required: true
+  cyrus-revision:
+    description: Cyrus SASL bundle revision
+    required: true
+  cyrus-tag:
+    description: GitHub release tag containing Cyrus SASL bundles
+    required: true
+  install-prefix:
+    description: CMake install prefix
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Android NDK
+      id: setup-ndk
+      uses: nttld/setup-ndk@v1
+      with:
+        ndk-version: ${{ inputs.ndk-version }}
+
+    - name: Install Qt
+      uses: jurplel/install-qt-action@v4
+      with:
+        version: ${{ inputs.qt-version }}
+        target: android
+        arch: ${{ inputs.qt-arch }}
+        cache: true
+
+    - name: Download static Cyrus SASL bundle
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        rm -rf cyrus
+        mkdir cyrus
+        asset="cyrus-sasl-${{ inputs.cyrus-version }}-${{ inputs.cyrus-revision }}-android-${{ inputs.abi }}.tar.gz"
+        gh release download "${{ inputs.cyrus-tag }}" --repo '${{ github.repository }}' -p "$asset"
+        tar -xzf "$asset" -C cyrus
+
+    - name: Configure and build QCA
+      shell: bash
+      env:
+        ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+      run: |
+        qt_cmake=$(find "$QT_ROOT_DIR" -type f -name qt-cmake -print -quit)
+        test -n "$qt_cmake"
+        chmod +x "$qt_cmake"
+        "$qt_cmake" -S . -B build -G Ninja \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_INSTALL_PREFIX="${{ inputs.install-prefix }}" \
+          -DBUILD_WITH_QT6=ON -DBUILD_TESTS=OFF -DBUILD_TOOLS=OFF \
+          -DBUILD_PLUGINS='ossl;cyrus-sasl' \
+          -DSasl2_ROOT="$PWD/cyrus" -DSASL2_USE_STATIC_LIBS=ON
+        cmake --build build
