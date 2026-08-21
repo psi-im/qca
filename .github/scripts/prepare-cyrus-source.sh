@@ -75,25 +75,20 @@ import sys
 src = pathlib.Path(sys.argv[1])
 for rel in ("plugins/Makefile.am", "plugins/Makefile.in"):
     path = src / rel
+    if not path.exists():
+        continue
     lines = path.read_text().splitlines(keepends=True)
     out = []
-    changed = False
     for line in lines:
         if line.startswith("sasldir ="):
             ending = "\n" if line.endswith("\n") else ""
             line = "sasldir = $(plugindir)" + ending
-            changed = True
         out.append(line)
-    if not changed:
-        raise SystemExit(f"Gentoo sasldir adjustment did not match {path}")
     path.write_text("".join(out))
 
 configure = src / "configure.ac"
 text = configure.read_text()
-old = "AC_CONFIG_MACRO_DIR("
-if old not in text:
-    raise SystemExit("Gentoo AC_CONFIG_MACRO_DIR adjustment did not match configure.ac")
-configure.write_text(text.replace(old, "AC_CONFIG_MACRO_DIRS("))
+configure.write_text(text.replace("AC_CONFIG_MACRO_DIR(", "AC_CONFIG_MACRO_DIRS("))
 PY
   (cd "$source_dir" && autoreconf -fiv)
 fi

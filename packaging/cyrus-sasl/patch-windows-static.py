@@ -32,8 +32,8 @@ replace_once(
 
 replace_once(
     libmk,
-    'CPPFLAGS = /wd4996 /D NEED_GETOPT /I "..\\win32\\include" /I "." /I "..\\include" /D "LIBSASL_EXPORTS" $(OPENSSL_FLAGS) $(COMMON_CPPFLAGS)\n',
-    'CPPFLAGS = /wd4996 /D NEED_GETOPT /I "..\\win32\\include" /I "." /I "..\\include" /I "..\\plugins" /I "..\\common" /D "LIBSASL_EXPORTS" $(STATIC_PLUGIN_FLAGS) $(OPENSSL_FLAGS) $(COMMON_CPPFLAGS)\n'
+    'CPPFLAGS = /wd4996 /D NEED_GETOPT /I "..\\win32\\include" /I "." /I "..\\include" /D "LIBSASL_EXPORTS" $(COMMON_CPPFLAGS)\n',
+    'CPPFLAGS = /wd4996 /D NEED_GETOPT /I "..\\win32\\include" /I "." /I "..\\include" /I "..\\plugins" /I "..\\common" /I "$(OPENSSL_INCLUDE)" /D "LIBSASL_EXPORTS" $(STATIC_PLUGIN_FLAGS) $(COMMON_CPPFLAGS)\n'
 )
 
 replace_once(

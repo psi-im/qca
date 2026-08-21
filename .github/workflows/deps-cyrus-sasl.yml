@@ -13,7 +13,7 @@ concurrency:
 
 env:
   CYRUS_VERSION: 2.1.28
-  CYRUS_REVISION: r2
+  CYRUS_REVISION: r3
   CYRUS_GENTOO_PATCHSET: cyrus-sasl-2.1.28-r4-patches
   OPENSSL_VERSION: 3.5.2
   ANDROID_NDK_VERSION: r27c
@@ -124,10 +124,18 @@ jobs:
             .github/scripts/prepare-cyrus-source.sh "$CYRUS_VERSION" --autoreconf
           fi
 
+      - name: Set up MSVC environment
+        if: steps.existing.outputs.skip != 'true' && matrix.kind == 'windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Build Windows static Cyrus SASL
         if: steps.existing.outputs.skip != 'true' && matrix.kind == 'windows'
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           vcpkg install openssl:x64-windows
           python packaging/cyrus-sasl/patch-windows-static.py "cyrus-sasl-$env:CYRUS_VERSION"
           cd "cyrus-sasl-$env:CYRUS_VERSION"
