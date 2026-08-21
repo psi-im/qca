@@ -16,14 +16,28 @@ if(SASL2_FOUND)
   cmake_pop_check_state()
 
   set(QCA_SASL_SOURCES qca-cyrus-sasl.cpp)
-  include_directories( ${SASL2_INCLUDE_DIR} )
   add_library(qca-cyrus-sasl ${PLUGIN_TYPE} ${QCA_SASL_SOURCES})
 
   if(APPLE AND ${PLUGIN_TYPE} STREQUAL "MODULE")
     set_property(TARGET qca-cyrus-sasl PROPERTY SUFFIX ".dylib")
   endif()
 
-  target_link_libraries(qca-cyrus-sasl Qt${QT_MAJOR_VERSION}::Core ${QCA_LIB_NAME} ${SASL2_LIBRARIES})
+  target_link_libraries(qca-cyrus-sasl Qt${QT_MAJOR_VERSION}::Core ${QCA_LIB_NAME} Sasl2::Sasl2)
+
+  # Our Windows/macOS/Android dependency bundles contain a PIC static
+  # libsasl2 with PLAIN, SCRAM and DIGEST-MD5 built in. Those mechanisms
+  # use libcrypto, so resolve it in the final QCA plugin rather than making
+  # libsasl2 another runtime dependency.
+  if(SASL2_STATIC)
+    include(QcaOpenSSL)
+    qca_find_openssl(REQUIRED)
+    target_link_libraries(qca-cyrus-sasl OpenSSL::Crypto)
+    if(WIN32)
+      # Cyrus' public Windows headers otherwise declare the API dllimport.
+      # The private dependency bundle is a real static library.
+      target_compile_definitions(qca-cyrus-sasl PRIVATE WIN32 LIBSASL_EXPORTS)
+    endif()
+  endif()
   if(HAVE_SASL_CHANNEL_BINDING AND HAVE_SASL_BADBINDING)
     target_compile_definitions(qca-cyrus-sasl PRIVATE HAVE_SASL_CHANNEL_BINDING)
   endif()

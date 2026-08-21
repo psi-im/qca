@@ -1,0 +1,251 @@
+name: Cyrus SASL dependency bundles
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cyrus-sasl-dependency-bundles
+  cancel-in-progress: false
+
+env:
+  CYRUS_VERSION: 2.1.28
+  CYRUS_REVISION: r1
+  OPENSSL_VERSION: 3.5.2
+  ANDROID_NDK_VERSION: r27c
+  ANDROID_API: 28
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.vars.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: vars
+        shell: bash
+        run: echo "tag=deps-cyrus-sasl-${CYRUS_VERSION}-${CYRUS_REVISION}" >> "$GITHUB_OUTPUT"
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.vars.outputs.tag }}
+        run: |
+          gh release view "$TAG" --repo '${{ github.repository }}' >/dev/null 2>&1 || \
+            gh release create "$TAG" --repo '${{ github.repository }}' --title "$TAG" --notes "Static Cyrus SASL dependency bundles for QCA3." --prerelease
+
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-x64
+            kind: windows
+          - os: macos-15
+            platform: macos-arm64
+            kind: unix
+          - os: macos-15-intel
+            platform: macos-x86_64
+            kind: unix
+          - os: ubuntu-latest
+            platform: android-arm64-v8a
+            kind: android
+            abi: arm64-v8a
+            host: aarch64-linux-android
+            clang: aarch64-linux-android
+            openssl_target: android-arm64
+          - os: ubuntu-latest
+            platform: android-armeabi-v7a
+            kind: android
+            abi: armeabi-v7a
+            host: arm-linux-androideabi
+            clang: armv7a-linux-androideabi
+            openssl_target: android-arm
+          - os: ubuntu-latest
+            platform: android-x86_64
+            kind: android
+            abi: x86_64
+            host: x86_64-linux-android
+            clang: x86_64-linux-android
+            openssl_target: android-x86_64
+          - os: ubuntu-latest
+            platform: android-x86
+            kind: android
+            abi: x86
+            host: i686-linux-android
+            clang: i686-linux-android
+            openssl_target: android-x86
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compute asset name
+        id: asset
+        shell: bash
+        run: echo "name=cyrus-sasl-${CYRUS_VERSION}-${CYRUS_REVISION}-${{ matrix.platform }}.tar.gz" >> "$GITHUB_OUTPUT"
+      - name: Check existing release asset
+        id: existing
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          ASSET: ${{ steps.asset.outputs.name }}
+        run: |
+          if gh release view "$TAG" --repo '${{ github.repository }}' --json assets --jq '.assets[].name' | grep -Fxq "$ASSET"; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download Cyrus SASL
+        if: steps.existing.outputs.skip != 'true'
+        shell: bash
+        run: |
+          curl -L --fail -o cyrus.tar.gz \
+            "https://github.com/cyrusimap/cyrus-sasl/releases/download/cyrus-sasl-${CYRUS_VERSION}/cyrus-sasl-${CYRUS_VERSION}.tar.gz"
+          tar -xzf cyrus.tar.gz
+
+      - name: Build Windows static Cyrus SASL
+        if: steps.existing.outputs.skip != 'true' && matrix.kind == 'windows'
+        shell: pwsh
+        run: |
+          vcpkg install openssl:x64-windows
+          python packaging/cyrus-sasl/patch-windows-static.py "cyrus-sasl-$env:CYRUS_VERSION"
+          cd "cyrus-sasl-$env:CYRUS_VERSION"
+          $root = $env:VCPKG_INSTALLATION_ROOT
+          Push-Location lib
+          nmake /f NTMakefile STATIC=no STATIC_BUNDLE=1 CODEGEN=/MD CFG=Release `
+            OPENSSL_INCLUDE="$root\installed\x64-windows\include" `
+            OPENSSL_LIBPATH="$root\installed\x64-windows\lib"
+          Pop-Location
+          New-Item -ItemType Directory -Force ../bundle/include/sasl, ../bundle/lib | Out-Null
+          Copy-Item include\*.h ../bundle/include/sasl/
+          Copy-Item lib\libsasl2-static.lib ../bundle/lib/
+
+      - name: Install macOS build dependencies
+        if: steps.existing.outputs.skip != 'true' && matrix.kind == 'unix'
+        run: brew install openssl@3
+
+      - name: Build macOS static Cyrus SASL
+        if: steps.existing.outputs.skip != 'true' && matrix.kind == 'unix'
+        shell: bash
+        run: |
+          export CPPFLAGS="-I$(brew --prefix openssl@3)/include"
+          export LDFLAGS="-L$(brew --prefix openssl@3)/lib"
+          export LIBS="-lcrypto"
+          .github/scripts/build-cyrus-unix.sh "cyrus-sasl-${CYRUS_VERSION}" "$PWD/bundle"
+
+      - name: Set up Android NDK
+        if: steps.existing.outputs.skip != 'true' && matrix.kind == 'android'
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: ${{ env.ANDROID_NDK_VERSION }}
+
+      - name: Prepare Android toolchain and OpenSSL
+        if: steps.existing.outputs.skip != 'true' && matrix.kind == 'android'
+        shell: bash
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake libtool make perl
+          curl -L --fail -o openssl.tar.gz \
+            "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz"
+          tar -xzf openssl.tar.gz
+          toolchain="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export PATH="$toolchain:$PATH"
+          pushd "openssl-${OPENSSL_VERSION}"
+          ./Configure "${{ matrix.openssl_target }}" -D__ANDROID_API__="${ANDROID_API}" no-shared no-tests \
+            --prefix="$PWD/../android-openssl"
+          make -j2
+          make install_sw
+          popd
+
+      - name: Build Android static Cyrus SASL
+        if: steps.existing.outputs.skip != 'true' && matrix.kind == 'android'
+        shell: bash
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          toolchain="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export PATH="$toolchain:$PATH"
+          export CC="${{ matrix.clang }}${ANDROID_API}-clang"
+          export AR=llvm-ar
+          export RANLIB=llvm-ranlib
+          export STRIP=llvm-strip
+          export CPPFLAGS="-I$PWD/android-openssl/include"
+          export LDFLAGS="-L$PWD/android-openssl/lib"
+          export LIBS="-lcrypto -ldl"
+          .github/scripts/build-cyrus-unix.sh "cyrus-sasl-${CYRUS_VERSION}" "$PWD/bundle" "${{ matrix.host }}"
+
+      - name: Verify Windows mechanisms
+        if: steps.existing.outputs.skip != 'true' && matrix.kind == 'windows'
+        shell: pwsh
+        run: |
+          $root = $env:VCPKG_INSTALLATION_ROOT
+          cl /nologo /DWIN32 /DLIBSASL_EXPORTS /I bundle\include .github\scripts\verify-cyrus.c `
+            bundle\lib\libsasl2-static.lib `
+            "$root\installed\x64-windows\lib\libcrypto.lib" ws2_32.lib /Fe:verify-cyrus.exe
+          $env:PATH = "$root\installed\x64-windows\bin;$env:PATH"
+          .\verify-cyrus.exe
+
+      - name: Verify macOS mechanisms
+        if: steps.existing.outputs.skip != 'true' && matrix.kind == 'unix'
+        shell: bash
+        run: |
+          cc .github/scripts/verify-cyrus.c -Ibundle/include bundle/lib/libsasl2.a \
+            -L"$(brew --prefix openssl@3)/lib" -lcrypto -o verify-cyrus
+          ./verify-cyrus
+
+      - name: Verify Android static archive links
+        if: steps.existing.outputs.skip != 'true' && matrix.kind == 'android'
+        shell: bash
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          toolchain="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export PATH="$toolchain:$PATH"
+          "${{ matrix.clang }}${ANDROID_API}-clang" .github/scripts/verify-cyrus.c \
+            -Ibundle/include bundle/lib/libsasl2.a -Landroid-openssl/lib \
+            -lcrypto -ldl -o verify-cyrus-android
+          llvm-nm bundle/lib/libsasl2.a | grep -q 'plain_client_plug_init'
+          llvm-nm bundle/lib/libsasl2.a | grep -q 'scram_client_plug_init'
+          llvm-nm bundle/lib/libsasl2.a | grep -q 'digestmd5_client_plug_init'
+
+      - name: Add Cyrus SASL license
+        if: steps.existing.outputs.skip != 'true'
+        shell: bash
+        run: |
+          mkdir -p bundle/licenses
+          cp "cyrus-sasl-${CYRUS_VERSION}/COPYING" bundle/licenses/COPYING
+
+      - name: Record bundle metadata
+        if: steps.existing.outputs.skip != 'true'
+        shell: bash
+        run: |
+          cat > bundle/qca-cyrus-sasl-bundle.txt <<META
+          cyrus-sasl=${CYRUS_VERSION}
+          revision=${CYRUS_REVISION}
+          platform=${{ matrix.platform }}
+          mechanisms=PLAIN,SCRAM,DIGEST-MD5
+          linkage=static
+          pic=yes
+          META
+
+      - name: Pack dependency bundle
+        if: steps.existing.outputs.skip != 'true'
+        shell: bash
+        env:
+          ASSET: ${{ steps.asset.outputs.name }}
+        run: tar -czf "$ASSET" -C bundle .
+
+      - name: Publish dependency bundle
+        if: steps.existing.outputs.skip != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          ASSET: ${{ steps.asset.outputs.name }}
+        run: gh release upload "$TAG" "$ASSET" --repo '${{ github.repository }}'

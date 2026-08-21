@@ -1,0 +1,254 @@
+name: QCA3 packages
+
+on:
+  workflow_dispatch:
+  push:
+    tags: [ 'v3*' ]
+
+env:
+  QT_VERSION: 6.10.2
+  CYRUS_VERSION: 2.1.28
+  CYRUS_REVISION: r1
+  CYRUS_TAG: deps-cyrus-sasl-2.1.28-r1
+  ANDROID_NDK_VERSION: r27c
+
+jobs:
+  debian:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build qt6-base-dev libssl-dev libsasl2-dev dpkg-dev
+      - name: Build and install
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+            -DBUILD_WITH_QT6=ON -DBUILD_TESTS=OFF -DBUILD_TOOLS=ON \
+            -DBUILD_PLUGINS='ossl;cyrus-sasl'
+          cmake --build build
+          DESTDIR="$PWD/stage" cmake --install build
+          test -n "$(find stage -type f -name '*qca-ossl*.so*' -print -quit)"
+          test -n "$(find stage -type f -name '*qca-cyrus-sasl*.so*' -print -quit)"
+      - name: Build split deb packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^project(qca VERSION \([^)]*\)).*/\1/p' CMakeLists.txt)
+          arch=$(dpkg --print-architecture)
+          mkdir -p debs work/{runtime,dev,plugins,utils}
+          while IFS= read -r -d '' f; do
+            rel=${f#stage/}
+            case "$rel" in
+              */qca3-qt6/crypto/*) dst=plugins ;;
+              usr/include/*|*/cmake/*|*/pkgconfig/*|*.so) dst=dev ;;
+              usr/bin/*|usr/share/man/*) dst=utils ;;
+              *) dst=runtime ;;
+            esac
+            mkdir -p "work/$dst/$(dirname "$rel")"
+            cp -a "$f" "work/$dst/$rel"
+          done < <(find stage \( -type f -o -type l \) -print0)
+          make_deb() {
+            dir=$1 pkg=$2 depends=$3 desc=$4
+            mkdir -p "$dir/DEBIAN"
+            cat > "$dir/DEBIAN/control" <<CTRL
+          Package: $pkg
+          Version: $version
+          Architecture: $arch
+          Maintainer: Psi IM developers
+          Depends: $depends
+          Section: libs
+          Priority: optional
+          Description: $desc
+          CTRL
+            dpkg-deb --build --root-owner-group "$dir" "debs/${pkg}_${version}_${arch}.deb"
+          }
+          make_deb work/runtime libqca3-qt6-3 'libqt6core6t64, libc6, libstdc++6, libgcc-s1' 'QCA3 Qt6 runtime library'
+          make_deb work/plugins libqca3-qt6-plugins 'libqca3-qt6-3, libssl3t64, libsasl2-2' 'QCA3 Qt6 crypto plugins'
+          make_deb work/dev libqca3-qt6-dev 'libqca3-qt6-3, qt6-base-dev' 'QCA3 Qt6 development files'
+          make_deb work/utils qca3-qt6-utils 'libqca3-qt6-3' 'QCA3 Qt6 command line utilities'
+          ls -l debs
+      - name: Install package smoke test
+        run: sudo apt-get install -y ./debs/*.deb
+      - name: Compile installed CMake consumer
+        shell: bash
+        run: |
+          mkdir consumer
+          cat > consumer/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.16)
+          project(qca_consumer LANGUAGES CXX)
+          find_package(Qca3-qt6 CONFIG REQUIRED)
+          add_executable(qca-consumer main.cpp)
+          target_link_libraries(qca-consumer PRIVATE Qca3::Qca)
+          CMAKE
+          cat > consumer/main.cpp <<'CPP'
+          #include <QtCrypto>
+          int main() { QCA::Initializer init; return 0; }
+          CPP
+          cmake -S consumer -B consumer-build -G Ninja
+          cmake --build consumer-build
+          ./consumer-build/qca-consumer
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qca3-deb-ubuntu-24.04
+          path: debs/*.deb
+
+  desktop-sdk:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-x64
+            asset: cyrus-sasl-2.1.28-r1-windows-x64.tar.gz
+          - os: macos-15
+            platform: macos-arm64
+            asset: cyrus-sasl-2.1.28-r1-macos-arm64.tar.gz
+          - os: macos-15-intel
+            platform: macos-x86_64
+            asset: cyrus-sasl-2.1.28-r1-macos-x86_64.tar.gz
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          cache: true
+      - name: Download static Cyrus SASL bundle
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir cyrus
+          gh release download "$CYRUS_TAG" --repo '${{ github.repository }}' -p '${{ matrix.asset }}'
+          tar -xzf '${{ matrix.asset }}' -C cyrus
+      - name: Install OpenSSL on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: vcpkg install openssl:x64-windows
+      - name: Install OpenSSL on macOS
+        if: runner.os == 'macOS'
+        run: brew install openssl@3
+      - name: Configure Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cmake -S . -B build `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_INSTALL_PREFIX="$pwd/sdk" `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DBUILD_WITH_QT6=ON -DBUILD_TESTS=OFF -DBUILD_TOOLS=ON `
+            -DBUILD_PLUGINS="ossl;cyrus-sasl" `
+            -DSasl2_ROOT="$pwd/cyrus" -DSASL2_USE_STATIC_LIBS=ON
+      - name: Configure macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/sdk" \
+            -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
+            -DOSX_FRAMEWORK=OFF \
+            -DBUILD_WITH_QT6=ON -DBUILD_TESTS=OFF -DBUILD_TOOLS=ON \
+            -DBUILD_PLUGINS='ossl;cyrus-sasl' \
+            -DSasl2_ROOT="$PWD/cyrus" -DSASL2_USE_STATIC_LIBS=ON
+      - run: cmake --build build --config Release
+      - run: cmake --install build --config Release
+      - name: Install bundled Cyrus SASL license
+        shell: bash
+        run: |
+          mkdir -p sdk/share/licenses/qca3/cyrus-sasl
+          cp cyrus/licenses/COPYING sdk/share/licenses/qca3/cyrus-sasl/COPYING
+      - name: Verify required plugins
+        shell: bash
+        run: |
+          test -n "$(find sdk -type f \( -name '*qca-ossl*' -o -name '*qca-ossl*.dylib' \) -print -quit)"
+          test -n "$(find sdk -type f \( -name '*qca-cyrus-sasl*' -o -name '*qca-cyrus-sasl*.dylib' \) -print -quit)"
+      - name: Verify Cyrus SASL is not a desktop runtime dependency
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          plugin=$(find sdk -type f -name '*qca-cyrus-sasl*.dylib' -print -quit)
+          test -n "$plugin"
+          if otool -L "$plugin" | grep -Ei 'libsasl|sasl2'; then
+            echo 'qca-cyrus-sasl unexpectedly depends on shared Cyrus SASL' >&2
+            exit 1
+          fi
+      - name: Verify Cyrus SASL is not a Windows runtime dependency
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $plugin = Get-ChildItem sdk -Recurse -File | Where-Object { $_.Name -like '*qca-cyrus-sasl*.dll' } | Select-Object -First 1
+          if (-not $plugin) { throw 'qca-cyrus-sasl DLL not found' }
+          $deps = (dumpbin /DEPENDENTS $plugin.FullName) | Out-String
+          Write-Host $deps
+          if ($deps -match '(?i)(libsasl|sasl2).*\.dll') { throw 'qca-cyrus-sasl unexpectedly depends on shared Cyrus SASL' }
+      - name: Pack SDK
+        shell: bash
+        run: tar -czf "qca3-qt6-${{ matrix.platform }}.tar.gz" -C sdk .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qca3-qt6-${{ matrix.platform }}
+          path: qca3-qt6-${{ matrix.platform }}.tar.gz
+
+  android-sdk:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: arm64-v8a
+            qt_arch: android_arm64_v8a
+          - abi: armeabi-v7a
+            qt_arch: android_armv7
+          - abi: x86_64
+            qt_arch: android_x86_64
+          - abi: x86
+            qt_arch: android_x86
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: ${{ env.ANDROID_NDK_VERSION }}
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          target: android
+          arch: ${{ matrix.qt_arch }}
+          cache: true
+      - name: Download static Cyrus SASL bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir cyrus
+          asset="cyrus-sasl-${CYRUS_VERSION}-${CYRUS_REVISION}-android-${{ matrix.abi }}.tar.gz"
+          gh release download "$CYRUS_TAG" --repo '${{ github.repository }}' -p "$asset"
+          tar -xzf "$asset" -C cyrus
+      - name: Configure and build
+        shell: bash
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          qt_cmake=$(find "$QT_ROOT_DIR" -type f -name qt-cmake -print -quit)
+          "$qt_cmake" -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/sdk" \
+            -DBUILD_WITH_QT6=ON -DBUILD_TESTS=OFF -DBUILD_TOOLS=OFF \
+            -DBUILD_PLUGINS='ossl;cyrus-sasl' \
+            -DSasl2_ROOT="$PWD/cyrus" -DSASL2_USE_STATIC_LIBS=ON
+          cmake --build build
+          cmake --install build
+          mkdir -p sdk/share/licenses/qca3/cyrus-sasl
+          cp cyrus/licenses/COPYING sdk/share/licenses/qca3/cyrus-sasl/COPYING
+          test -n "$(find sdk -type f -name '*qca-ossl*.so' -print -quit)"
+          cyrus_plugin=$(find sdk -type f -name '*qca-cyrus-sasl*.so' -print -quit)
+          test -n "$cyrus_plugin"
+          if readelf -d "$cyrus_plugin" | grep NEEDED | grep -Ei 'libsasl|sasl2'; then
+            echo 'qca-cyrus-sasl unexpectedly depends on shared Cyrus SASL' >&2
+            exit 1
+          fi
+          tar -czf "qca3-qt6-android-${{ matrix.abi }}.tar.gz" -C sdk .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qca3-qt6-android-${{ matrix.abi }}
+          path: qca3-qt6-android-${{ matrix.abi }}.tar.gz
