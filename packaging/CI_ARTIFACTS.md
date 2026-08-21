@@ -42,6 +42,15 @@ otherwise append the static mechanisms to a throw-away top-level archive rather
 than `lib/.libs/libsasl2.a`. The build checks all six required client/server
 mechanism entry points before installation.
 
+OpenSSL is intentionally *not* part of the static Cyrus bundle. The selected
+SASL mechanisms keep their OpenSSL references unresolved until the final
+`qca-cyrus-sasl` link. Windows uses the dynamic vcpkg OpenSSL triplet, macOS
+uses Homebrew's shared OpenSSL, and the Android dependency build uses a private
+shared OpenSSL sysroot with its static `libcrypto.a`/`libssl.a` archives removed
+before Cyrus is configured and verified. The shipped QCA Android build then
+links `OpenSSL::Crypto`/`OpenSSL::SSL` from KDAB `android_openssl` as shared
+libraries.
+
 On Windows `packaging/cyrus-sasl/patch-windows-static.py` adds a real
 `libsasl2-static.lib` target to the upstream NMake build and explicitly compiles
 only `STATIC_PLAIN`, `STATIC_SCRAM` and `STATIC_DIGESTMD5`. It also removes the

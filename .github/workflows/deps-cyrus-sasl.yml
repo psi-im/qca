@@ -13,7 +13,7 @@ concurrency:
 
 env:
   CYRUS_VERSION: 2.1.28
-  CYRUS_REVISION: r4
+  CYRUS_REVISION: r5
   CYRUS_GENTOO_PATCHSET: cyrus-sasl-2.1.28-r4-patches
   OPENSSL_VERSION: 3.5.2
   ANDROID_NDK_VERSION: r27c
@@ -177,11 +177,16 @@ jobs:
           toolchain="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
           export PATH="$toolchain:$PATH"
           pushd "openssl-${OPENSSL_VERSION}"
-          ./Configure "${{ matrix.openssl_target }}" -D__ANDROID_API__="${ANDROID_API}" no-shared no-tests \
+          ./Configure "${{ matrix.openssl_target }}" -D__ANDROID_API__="${ANDROID_API}" shared no-tests \
             --prefix="$PWD/../android-openssl"
           make -j2
           make install_sw
           popd
+          # Cyrus is static, but OpenSSL is deliberately a final-link/runtime
+          # dependency of qca-cyrus-sasl.  Do not leave static OpenSSL archives
+          # in this private sysroot: -lcrypto must resolve to the shared library.
+          rm -f android-openssl/lib/libcrypto.a android-openssl/lib/libssl.a
+          test -e android-openssl/lib/libcrypto.so
 
       - name: Build Android static Cyrus SASL
         if: steps.existing.outputs.skip != 'true' && matrix.kind == 'android'
@@ -231,6 +236,10 @@ jobs:
           "${{ matrix.clang }}${ANDROID_API}-clang" .github/scripts/verify-cyrus.c \
             -Ibundle/include bundle/lib/libsasl2.a -Landroid-openssl/lib \
             -lcrypto -ldl -o verify-cyrus-android
+          if ! llvm-readelf -d verify-cyrus-android | grep NEEDED | grep -q 'libcrypto'; then
+            echo 'Android Cyrus verification did not link against shared libcrypto' >&2
+            exit 1
+          fi
           llvm-nm bundle/lib/libsasl2.a | grep -q 'plain_client_plug_init'
           llvm-nm bundle/lib/libsasl2.a | grep -q 'scram_client_plug_init'
           llvm-nm bundle/lib/libsasl2.a | grep -q 'digestmd5_client_plug_init'

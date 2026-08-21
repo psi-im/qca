@@ -64,6 +64,8 @@ for symbol in \
   digestmd5_client_plug_init digestmd5_server_plug_init; do
   if ! "$nm_bin" -g "$archive" 2>/dev/null | awk -v wanted="$symbol" '
     {
+      if (NF < 2)
+        next
       name = $NF
       type = $(NF - 1)
       sub(/^_/, "", name)
