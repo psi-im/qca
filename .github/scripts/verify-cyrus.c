@@ -21,42 +21,60 @@ static sasl_callback_t callbacks[] = {{SASL_CB_GETPATH, (int (*)(void))getpath, 
                                       {SASL_CB_VERIFYFILE, (int (*)(void))verifyfile, NULL},
                                       {SASL_CB_LIST_END, NULL, NULL}};
 
-static int check_mech(const char *mech)
+static int has_mechanism(const char **mechanisms, const char *expected)
 {
-    sasl_conn_t     *conn     = NULL;
-    const char      *out      = NULL;
-    const char      *chosen   = NULL;
-    unsigned         outlen   = 0;
-    sasl_interact_t *interact = NULL;
-    int              rc       = sasl_client_new("xmpp", "example.invalid", NULL, NULL, callbacks, 0, &conn);
-    if (rc != SASL_OK) {
-        fprintf(stderr, "sasl_client_new failed for %s: %d\n", mech, rc);
-        return 1;
+    size_t i;
+
+    for (i = 0; mechanisms[i] != NULL; ++i) {
+        if (strcmp(mechanisms[i], expected) == 0) {
+            return 1;
+        }
     }
 
-    rc = sasl_client_start(conn, mech, &interact, &out, &outlen, &chosen);
-    if (rc == SASL_NOMECH || chosen == NULL || strcmp(chosen, mech) != 0) {
-        fprintf(stderr, "missing static SASL mechanism: %s (rc=%d, chosen=%s)\n", mech, rc, chosen ? chosen : "<none>");
-        sasl_dispose(&conn);
-        return 1;
-    }
-
-    sasl_dispose(&conn);
     return 0;
 }
 
 int main(void)
 {
-    int failed = 0;
-    int rc     = sasl_client_init(callbacks);
+    static const char *const expected[] = {"PLAIN", "SCRAM-SHA-256", "DIGEST-MD5"};
+    const char              **mechanisms;
+    size_t                    i;
+    int                       failed = 0;
+    int                       rc     = sasl_client_init(callbacks);
+
     if (rc != SASL_OK) {
         fprintf(stderr, "sasl_client_init failed: %d\n", rc);
         return 10;
     }
 
-    failed |= check_mech("PLAIN");
-    failed |= check_mech("SCRAM-SHA-256");
-    failed |= check_mech("DIGEST-MD5");
+    mechanisms = sasl_global_listmech();
+    if (mechanisms == NULL) {
+        fprintf(stderr, "sasl_global_listmech failed\n");
+        sasl_done();
+        return 11;
+    }
+
+    for (i = 0; i < sizeof(expected) / sizeof(expected[0]); ++i) {
+        if (!has_mechanism(mechanisms, expected[i])) {
+            fprintf(stderr, "missing static SASL mechanism: %s\n", expected[i]);
+            failed = 1;
+        }
+    }
+
+    if (failed) {
+        fputs("registered SASL mechanisms:", stderr);
+        for (i = 0; mechanisms[i] != NULL; ++i) {
+            fprintf(stderr, " %s", mechanisms[i]);
+        }
+        fputc('\n', stderr);
+    }
+
     sasl_done();
-    return failed;
+
+    if (failed) {
+        return 1;
+    }
+
+    puts("Cyrus SASL static mechanisms verified");
+    return 0;
 }
