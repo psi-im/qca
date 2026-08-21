@@ -13,7 +13,7 @@ static dependency bundles described below.
 
 ## Cyrus SASL dependency bundles
 
-`.github/workflows/deps-cyrus-sasl.yml` is a manually triggered dependency
+`.github/workflows/deps-cyrus-sasl.yml` is both a reusable and manually triggered dependency
 build. It creates the prerelease tag
 `deps-cyrus-sasl-${CYRUS_VERSION}-${CYRUS_REVISION}` and publishes one static
 bundle per non-Linux target as release assets.
@@ -24,8 +24,18 @@ The bundle contains a static Cyrus SASL with only the mechanisms QCA needs:
 - SCRAM
 - DIGEST-MD5
 
+The dependency recipe starts from the official Cyrus SASL 2.1.28 release and
+applies Gentoo's `cyrus-sasl-2.1.28-r4-patches` patchset. Both the upstream
+source tarball and Gentoo patch archive are verified against the SHA512 values
+from Gentoo's `dev-libs/cyrus-sasl/Manifest`. Source preparation mirrors the
+relevant Gentoo `src_prepare` steps (`sasldir`, `AC_CONFIG_MACRO_DIRS`,
+`autoreconf`).
+
 On macOS and Android the upstream autotools static-plugin support is used with
-`-fPIC`. Android is pinned to NDK r27c (27.2.12479018), matching Qt 6.10. On Windows `packaging/cyrus-sasl/patch-windows-static.py` adds a real
+`-std=gnu17` and `-fPIC`; the build also follows Gentoo's compatibility choices
+including `--disable-macos-framework`, `--disable-cmulocal`, `--disable-krb4`,
+`--with-dblib=none` and `--with-sphinx-build=no`. Cross builds explicitly set
+`CC_FOR_BUILD`. Android is pinned to NDK r27c (27.2.12479018), matching Qt 6.10. On Windows `packaging/cyrus-sasl/patch-windows-static.py` adds a real
 `libsasl2-static.lib` target to the upstream NMake build and explicitly compiles
 only `STATIC_PLAIN`, `STATIC_SCRAM` and `STATIC_DIGESTMD5`. Upstream's
 `NO_STATIC_PLUGINS` define is intentionally retained so its Windows `config.h`
@@ -34,8 +44,9 @@ does not implicitly enable unrelated mechanisms.
 Existing release assets are never overwritten. Bump `CYRUS_REVISION` whenever
 the dependency recipe changes.
 
-Run this workflow once before running non-Linux QCA CI/package jobs for a new
-dependency revision.
+Trusted CI/package runs call this workflow automatically. Existing assets are
+reused and only missing bundles are built. It can still be run manually when
+prebuilding a new dependency revision.
 
 ## Packages and SDKs
 
@@ -59,9 +70,8 @@ dependency.
 ## Bootstrap order
 
 The static Cyrus SASL release is intentionally independent of normal QCA CI.
-After changing the Cyrus version or bundle revision, run **Cyrus SASL dependency bundles** once.
-`ci.yml` and `packages.yml` perform a single preflight check before starting the desktop/Android matrices;
-if the release or an asset is missing they stop with an explicit bootstrap message instead of failing every platform job.
+After changing the Cyrus version, Gentoo patchset or bundle recipe, bump `CYRUS_REVISION`.
+Trusted `ci.yml`/`packages.yml` runs invoke the reusable dependency workflow first; it creates the release and builds missing assets before desktop/Android jobs start. Pull requests remain read-only and require the corresponding dependency assets to exist already.
 
 
 ## Automatic dependency bootstrap

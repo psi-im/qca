@@ -13,7 +13,8 @@ concurrency:
 
 env:
   CYRUS_VERSION: 2.1.28
-  CYRUS_REVISION: r1
+  CYRUS_REVISION: r2
+  CYRUS_GENTOO_PATCHSET: cyrus-sasl-2.1.28-r4-patches
   OPENSSL_VERSION: 3.5.2
   ANDROID_NDK_VERSION: r27c
   ANDROID_API: 28
@@ -99,13 +100,29 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Download Cyrus SASL
+      - name: Install macOS source-build dependencies
+        if: steps.existing.outputs.skip != 'true' && matrix.kind == 'unix'
+        shell: bash
+        run: |
+          brew install autoconf automake libtool openssl@3
+          echo "$(brew --prefix libtool)/libexec/gnubin" >> "$GITHUB_PATH"
+
+      - name: Install Android source-build dependencies
+        if: steps.existing.outputs.skip != 'true' && matrix.kind == 'android'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake libtool make perl patch
+
+      - name: Prepare Cyrus SASL with Gentoo patchset
         if: steps.existing.outputs.skip != 'true'
         shell: bash
         run: |
-          curl -L --fail -o cyrus.tar.gz \
-            "https://github.com/cyrusimap/cyrus-sasl/releases/download/cyrus-sasl-${CYRUS_VERSION}/cyrus-sasl-${CYRUS_VERSION}.tar.gz"
-          tar -xzf cyrus.tar.gz
+          if [[ '${{ matrix.kind }}' == windows ]]; then
+            .github/scripts/prepare-cyrus-source.sh "$CYRUS_VERSION"
+          else
+            .github/scripts/prepare-cyrus-source.sh "$CYRUS_VERSION" --autoreconf
+          fi
 
       - name: Build Windows static Cyrus SASL
         if: steps.existing.outputs.skip != 'true' && matrix.kind == 'windows'
@@ -123,10 +140,6 @@ jobs:
           New-Item -ItemType Directory -Force ../bundle/include/sasl, ../bundle/lib | Out-Null
           Copy-Item include\*.h ../bundle/include/sasl/
           Copy-Item lib\libsasl2-static.lib ../bundle/lib/
-
-      - name: Install macOS build dependencies
-        if: steps.existing.outputs.skip != 'true' && matrix.kind == 'unix'
-        run: brew install openssl@3
 
       - name: Build macOS static Cyrus SASL
         if: steps.existing.outputs.skip != 'true' && matrix.kind == 'unix'
@@ -150,9 +163,7 @@ jobs:
         env:
           ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y autoconf automake libtool make perl
-          curl -L --fail -o openssl.tar.gz \
+          curl -L --fail --retry 3 -o openssl.tar.gz \
             "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz"
           tar -xzf openssl.tar.gz
           toolchain="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
@@ -173,6 +184,7 @@ jobs:
           toolchain="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
           export PATH="$toolchain:$PATH"
           export CC="${{ matrix.clang }}${ANDROID_API}-clang"
+          export CC_FOR_BUILD=cc
           export AR=llvm-ar
           export RANLIB=llvm-ranlib
           export STRIP=llvm-strip
@@ -226,13 +238,16 @@ jobs:
         if: steps.existing.outputs.skip != 'true'
         shell: bash
         run: |
+          pic=yes
+          [[ '${{ matrix.kind }}' == windows ]] && pic=n/a
           cat > bundle/qca-cyrus-sasl-bundle.txt <<META
           cyrus-sasl=${CYRUS_VERSION}
           revision=${CYRUS_REVISION}
+          gentoo-patchset=${CYRUS_GENTOO_PATCHSET}
           platform=${{ matrix.platform }}
           mechanisms=PLAIN,SCRAM,DIGEST-MD5
           linkage=static
-          pic=yes
+          pic=$pic
           META
 
       - name: Pack dependency bundle
