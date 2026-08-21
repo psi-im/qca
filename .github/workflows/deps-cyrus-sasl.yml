@@ -238,13 +238,18 @@ jobs:
           "${{ matrix.clang }}${ANDROID_API}-clang" .github/scripts/verify-cyrus.c \
             -Ibundle/include bundle/lib/libsasl2.a -Landroid-openssl/lib \
             -lcrypto -ldl -o verify-cyrus-android
-          if ! llvm-readelf -d verify-cyrus-android | grep NEEDED | grep -q 'libcrypto'; then
+          llvm-readelf -d verify-cyrus-android > verify-cyrus.dynamic.txt
+          if ! grep -Eq 'NEEDED.*libcrypto' verify-cyrus.dynamic.txt; then
             echo 'Android Cyrus verification did not link against shared libcrypto' >&2
             exit 1
           fi
-          llvm-nm bundle/lib/libsasl2.a | grep -q 'plain_client_plug_init'
-          llvm-nm bundle/lib/libsasl2.a | grep -q 'scram_client_plug_init'
-          llvm-nm bundle/lib/libsasl2.a | grep -q 'digestmd5_client_plug_init'
+          llvm-nm bundle/lib/libsasl2.a > cyrus-symbols.txt
+          for symbol in plain_client_plug_init scram_client_plug_init digestmd5_client_plug_init; do
+            if ! grep -Eq "[[:space:]]${symbol}$" cyrus-symbols.txt; then
+              echo "Android Cyrus archive is missing ${symbol}" >&2
+              exit 1
+            fi
+          done
 
       - name: Add Cyrus SASL license
         if: steps.existing.outputs.skip != 'true'
