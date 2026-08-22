@@ -180,7 +180,7 @@ jobs:
 
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
 
-      - name: Download packaging artifacts
+      - name: Download packaging artifact archives
         if: steps.existing_release.outputs.exists != 'true'
         shell: bash
         env:
@@ -188,44 +188,41 @@ jobs:
           RUN_ID: ${{ steps.packaging.outputs.run_id }}
         run: |
           set -euo pipefail
-          mkdir -p downloaded-artifacts
-          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --dir downloaded-artifacts
-
-      - name: Prepare release assets
-        if: steps.existing_release.outputs.exists != 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
           mkdir -p release-assets
 
-          while IFS= read -r -d '' file; do
-            name=$(basename "$file")
-            if [[ -e "release-assets/$name" ]]; then
-              echo "::error::Duplicate release asset name: $name"
-              exit 1
-            fi
-            cp "$file" "release-assets/$name"
-          done < <(find downloaded-artifacts -type f \( -name '*.deb' -o -name '*.tar.gz' \) -print0)
-
-          expected_tarballs=(
-            qca3-qt6-windows-x64.tar.gz
-            qca3-qt6-macos-arm64.tar.gz
-            qca3-qt6-macos-x86_64.tar.gz
-            qca3-qt6-android-arm64-v8a.tar.gz
-            qca3-qt6-android-armeabi-v7a.tar.gz
-            qca3-qt6-android-x86_64.tar.gz
-            qca3-qt6-android-x86.tar.gz
+          expected_artifacts=(
+            qca3-deb-ubuntu-24.04
+            qca3-qt6-windows-x64
+            qca3-qt6-macos-arm64
+            qca3-qt6-macos-x86_64
+            qca3-qt6-android-arm64-v8a
+            qca3-qt6-android-armeabi-v7a
+            qca3-qt6-android-x86_64
+            qca3-qt6-android-x86
           )
-          for asset in "${expected_tarballs[@]}"; do
-            if [[ ! -f "release-assets/$asset" ]]; then
-              echo "::error::Missing release asset: $asset"
+
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts?per_page=100" \
+            > "$RUNNER_TEMP/package-artifacts.json"
+
+          for artifact in "${expected_artifacts[@]}"; do
+            id=$(jq -r --arg name "$artifact" '
+              [.artifacts[] | select(.name == $name and .expired == false)]
+              | first | .id // empty
+            ' "$RUNNER_TEMP/package-artifacts.json")
+            if [[ -z "$id" ]]; then
+              echo "::error::Missing or expired packaging artifact: $artifact"
               exit 1
             fi
+
+            archive="release-assets/${artifact}.zip"
+            echo "Downloading $artifact as $(basename "$archive")"
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" > "$archive"
+            unzip -tq "$archive" >/dev/null
           done
 
-          deb_count=$(find release-assets -maxdepth 1 -type f -name '*.deb' | wc -l)
-          if [[ "$deb_count" -ne 4 ]]; then
-            echo "::error::Expected 4 Debian packages, found $deb_count"
+          count=$(find release-assets -maxdepth 1 -type f -name '*.zip' | wc -l)
+          if [[ "$count" -ne 8 ]]; then
+            echo "::error::Expected 8 release archives, found $count"
             exit 1
           fi
 
@@ -239,7 +236,7 @@ jobs:
           TAG: ${{ steps.release_tag.outputs.tag }}
         run: |
           set -euo pipefail
-          gh release create "$TAG" release-assets/* \
+          gh release create "$TAG" release-assets/*.zip \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --generate-notes \
