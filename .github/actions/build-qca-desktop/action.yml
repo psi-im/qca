@@ -41,10 +41,35 @@ runs:
         gh release download "${{ inputs.cyrus-tag }}" --repo '${{ github.repository }}' -p "$asset"
         tar -xzf "$asset" -C cyrus
 
+    - name: Resolve Windows vcpkg cache key
+      if: runner.os == 'Windows'
+      id: vcpkg-cache-key
+      shell: pwsh
+      run: |
+        $vcpkgRevision = (git -C $env:VCPKG_INSTALLATION_ROOT rev-parse HEAD).Trim()
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+        $vsPath = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
+        $toolsetFile = Join-Path $vsPath 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt'
+        $toolset = (Get-Content $toolsetFile -Raw).Trim()
+        "vcpkg=$vcpkgRevision" >> $env:GITHUB_OUTPUT
+        "msvc=$toolset" >> $env:GITHUB_OUTPUT
+
+    - name: Restore Windows vcpkg binary cache
+      if: runner.os == 'Windows'
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/vcpkg-binary-cache
+        key: qca-vcpkg-openssl-${{ runner.os }}-${{ steps.vcpkg-cache-key.outputs.vcpkg }}-${{ steps.vcpkg-cache-key.outputs.msvc }}-x64-windows
+
     - name: Install OpenSSL on Windows
       if: runner.os == 'Windows'
       shell: pwsh
-      run: vcpkg install openssl:x64-windows
+      run: |
+        $cache = Join-Path $env:RUNNER_TEMP 'vcpkg-binary-cache'
+        New-Item -ItemType Directory -Force -Path $cache | Out-Null
+        $env:VCPKG_BINARY_SOURCES = "clear;files,$cache,readwrite"
+        vcpkg install openssl:x64-windows
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     - name: Install OpenSSL on macOS
       if: runner.os == 'macOS'
