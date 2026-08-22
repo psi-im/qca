@@ -14,6 +14,9 @@ inputs:
   ndk-version:
     description: Android NDK version
     required: true
+  android-api:
+    description: Minimum Android API level
+    required: true
   cyrus-version:
     description: Cyrus SASL version
     required: true
@@ -66,6 +69,7 @@ runs:
         "$qt_cmake" -S . -B build -G Ninja \
           -DCMAKE_BUILD_TYPE=Release \
           -DCMAKE_INSTALL_PREFIX="${{ inputs.install-prefix }}" \
+          -DANDROID_PLATFORM="android-${{ inputs.android-api }}" \
           -DBUILD_WITH_QT6=ON -DBUILD_TESTS=OFF -DBUILD_TOOLS=OFF \
           -DBUILD_PLUGINS='ossl;cyrus-sasl' \
           -DSasl2_ROOT="$PWD/cyrus" -DSASL2_USE_STATIC_LIBS=ON
