@@ -108,6 +108,7 @@ runs:
           -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
           -DVCPKG_TARGET_TRIPLET=x64-windows-release `
           -DVCPKG_OVERLAY_TRIPLETS="$triplets" `
+          -DUSE_RELATIVE_PATHS=ON `
           -DBUILD_WITH_QT6=ON -DBUILD_TESTS=OFF -DBUILD_TOOLS=ON `
           -DBUILD_PLUGINS="ossl;cyrus-sasl" `
           -DSasl2_ROOT="$pwd/cyrus" -DSASL2_USE_STATIC_LIBS=ON
@@ -122,6 +123,7 @@ runs:
           -DCMAKE_INSTALL_NAME_DIR='@rpath' \
           -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
           -DOSX_FRAMEWORK=OFF \
+          -DUSE_RELATIVE_PATHS=ON \
           -DBUILD_WITH_QT6=ON -DBUILD_TESTS=OFF -DBUILD_TOOLS=ON \
           -DBUILD_PLUGINS='ossl;cyrus-sasl' \
           -DSasl2_ROOT="$PWD/cyrus" -DSASL2_USE_STATIC_LIBS=ON
