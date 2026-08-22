@@ -70,6 +70,7 @@ runs:
           -DCMAKE_BUILD_TYPE=Release \
           -DCMAKE_INSTALL_PREFIX="${{ inputs.install-prefix }}" \
           -DANDROID_PLATFORM="android-${{ inputs.android-api }}" \
+          -DUSE_RELATIVE_PATHS=ON \
           -DBUILD_WITH_QT6=ON -DBUILD_TESTS=OFF -DBUILD_TOOLS=OFF \
           -DBUILD_PLUGINS='ossl;cyrus-sasl' \
           -DSasl2_ROOT="$PWD/cyrus" -DSASL2_USE_STATIC_LIBS=ON
