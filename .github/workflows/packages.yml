@@ -165,6 +165,41 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "dumpbin failed with exit code $LASTEXITCODE" }
           Write-Host $deps
           if ($deps -match '(?i)(libsasl|sasl2).*\.dll') { throw 'qca-cyrus-sasl unexpectedly depends on shared Cyrus SASL' }
+      - name: Compile consumer after relocating SDK
+        shell: bash
+        run: |
+          mv sdk relocated-sdk
+          mkdir consumer
+          cat > consumer/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.16)
+          project(qca_consumer LANGUAGES CXX)
+          find_package(Qca3-qt6 CONFIG REQUIRED)
+          add_executable(qca-consumer main.cpp)
+          target_link_libraries(qca-consumer PRIVATE Qca3::Qca)
+          CMAKE
+          cat > consumer/main.cpp <<'CPP'
+          #include <QtCrypto>
+          int main() { QCA::Initializer init; return 0; }
+          CPP
+          cmake -S consumer -B consumer-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            "-DCMAKE_PREFIX_PATH=$PWD/relocated-sdk;$QT_ROOT_DIR"
+          cmake --build consumer-build
+      - name: Run relocated consumer on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:PATH = "$pwd\relocated-sdk\bin;$env:QT_ROOT_DIR\bin;$env:PATH"
+          & "$pwd\consumer-build\qca-consumer.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run relocated consumer on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          DYLD_LIBRARY_PATH="$PWD/relocated-sdk/lib:${DYLD_LIBRARY_PATH:-}" ./consumer-build/qca-consumer
+      - name: Restore SDK artifact path
+        shell: bash
+        run: mv relocated-sdk sdk
       - uses: actions/upload-artifact@v4
         with:
           name: qca3-qt6-${{ matrix.platform }}
@@ -209,6 +244,34 @@ jobs:
             echo 'qca-cyrus-sasl unexpectedly depends on shared Cyrus SASL' >&2
             exit 1
           fi
+      - name: Compile consumer after relocating SDK
+        shell: bash
+        run: |
+          mv sdk relocated-sdk
+          mkdir consumer
+          cat > consumer/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.16)
+          project(qca_consumer LANGUAGES CXX)
+          find_package(Qca3-qt6 CONFIG REQUIRED)
+          add_library(qca-consumer SHARED main.cpp)
+          target_link_libraries(qca-consumer PRIVATE Qca3::Qca)
+          CMAKE
+          cat > consumer/main.cpp <<'CPP'
+          #include <QtCrypto>
+          extern "C" int qca_consumer_smoke()
+          {
+              QCA::Initializer init;
+              return 0;
+          }
+          CPP
+          qt_cmake=$(find "$QT_ROOT_DIR" -type f -name qt-cmake -print -quit)
+          test -n "$qt_cmake"
+          "$qt_cmake" -S consumer -B consumer-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DANDROID_PLATFORM="android-$ANDROID_API" \
+            -DCMAKE_PREFIX_PATH="$PWD/relocated-sdk"
+          cmake --build consumer-build
+          mv relocated-sdk sdk
       - uses: actions/upload-artifact@v4
         with:
           name: qca3-qt6-android-${{ matrix.abi }}
