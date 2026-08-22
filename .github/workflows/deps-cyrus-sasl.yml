@@ -59,13 +59,6 @@ jobs:
             clang: aarch64-linux-android
             openssl_target: android-arm64
           - os: ubuntu-latest
-            platform: android-armeabi-v7a
-            kind: android
-            abi: armeabi-v7a
-            host: arm-linux-androideabi
-            clang: armv7a-linux-androideabi
-            openssl_target: android-arm
-          - os: ubuntu-latest
             platform: android-x86_64
             kind: android
             abi: x86_64
