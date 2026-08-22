@@ -120,7 +120,7 @@ jobs:
         run: |
           cmake --install build --config Release
           mv sdk relocated-sdk
-      - name: Compile relocated SDK consumer
+      - name: Prepare relocated SDK consumer
         shell: bash
         run: |
           mkdir consumer
@@ -135,21 +135,29 @@ jobs:
           #include <QtCrypto>
           int main() { QCA::Initializer init; return 0; }
           CPP
-          cmake -S consumer -B consumer-build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            "-DCMAKE_PREFIX_PATH=$PWD/relocated-sdk;$QT_ROOT_DIR"
-          cmake --build consumer-build
-      - name: Run relocated consumer on Windows
+      - name: Compile and run relocated SDK consumer on Windows
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $env:PATH = "$pwd\relocated-sdk\bin;$env:QT_ROOT_DIR\bin;$env:PATH"
-          & "$pwd\consumer-build\qca-consumer.exe"
+          $qcaDir = Join-Path $pwd 'relocated-sdk\lib\cmake\Qca3-qt6'
+          cmake -S consumer -B consumer-build `
+            "-DQca3-qt6_DIR=$qcaDir" `
+            "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Run relocated consumer on macOS
+          cmake --build consumer-build --config Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:PATH = "$pwd\relocated-sdk\bin;$env:QT_ROOT_DIR\bin;$env:PATH"
+          & "$pwd\consumer-build\Release\qca-consumer.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Compile and run relocated SDK consumer on macOS
         if: runner.os == 'macOS'
         shell: bash
         run: |
+          cmake -S consumer -B consumer-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            "-DQca3-qt6_DIR=$PWD/relocated-sdk/lib/cmake/Qca3-qt6" \
+            "-DCMAKE_PREFIX_PATH=$QT_ROOT_DIR"
+          cmake --build consumer-build
           DYLD_LIBRARY_PATH="$PWD/relocated-sdk/lib:${DYLD_LIBRARY_PATH:-}" ./consumer-build/qca-consumer
 
   android:
@@ -213,5 +221,5 @@ jobs:
           "$qt_cmake" -S consumer -B consumer-build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DANDROID_PLATFORM="android-$ANDROID_API" \
-            -DCMAKE_PREFIX_PATH="$PWD/relocated-sdk"
+            "-DQca3-qt6_DIR=$PWD/relocated-sdk/lib/cmake/Qca3-qt6"
           cmake --build consumer-build
