@@ -37,7 +37,6 @@ jobs:
             "cyrus-sasl-${CYRUS_VERSION}-${CYRUS_REVISION}-macos-arm64.tar.gz"
             "cyrus-sasl-${CYRUS_VERSION}-${CYRUS_REVISION}-macos-x86_64.tar.gz"
             "cyrus-sasl-${CYRUS_VERSION}-${CYRUS_REVISION}-android-arm64-v8a.tar.gz"
-            "cyrus-sasl-${CYRUS_VERSION}-${CYRUS_REVISION}-android-armeabi-v7a.tar.gz"
             "cyrus-sasl-${CYRUS_VERSION}-${CYRUS_REVISION}-android-x86_64.tar.gz"
             "cyrus-sasl-${CYRUS_VERSION}-${CYRUS_REVISION}-android-x86.tar.gz"
           )
@@ -125,8 +124,6 @@ jobs:
         include:
           - abi: arm64-v8a
             qt_arch: android_arm64_v8a
-          - abi: armeabi-v7a
-            qt_arch: android_armv7
           - abi: x86_64
             qt_arch: android_x86_64
           - abi: x86
