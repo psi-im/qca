@@ -59,16 +59,17 @@ runs:
       uses: actions/cache@v4
       with:
         path: ${{ runner.temp }}/vcpkg-binary-cache
-        key: qca-vcpkg-openssl-${{ runner.os }}-${{ steps.vcpkg-cache-key.outputs.vcpkg }}-${{ steps.vcpkg-cache-key.outputs.msvc }}-x64-windows
+        key: qca-vcpkg-openssl-${{ runner.os }}-${{ steps.vcpkg-cache-key.outputs.vcpkg }}-${{ steps.vcpkg-cache-key.outputs.msvc }}-x64-windows-release
 
     - name: Install OpenSSL on Windows
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
         $cache = Join-Path $env:RUNNER_TEMP 'vcpkg-binary-cache'
+        $triplets = Join-Path $pwd '.github\vcpkg\triplets'
         New-Item -ItemType Directory -Force -Path $cache | Out-Null
         $env:VCPKG_BINARY_SOURCES = "clear;files,$cache,readwrite"
-        vcpkg install openssl:x64-windows
+        vcpkg install openssl:x64-windows-release --overlay-triplets="$triplets"
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     - name: Install OpenSSL on macOS
@@ -80,10 +81,13 @@ runs:
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
+        $triplets = Join-Path $pwd '.github\vcpkg\triplets'
         cmake -S . -B build `
           -DCMAKE_BUILD_TYPE=Release `
           -DCMAKE_INSTALL_PREFIX="${{ inputs.install-prefix }}" `
           -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+          -DVCPKG_TARGET_TRIPLET=x64-windows-release `
+          -DVCPKG_OVERLAY_TRIPLETS="$triplets" `
           -DBUILD_WITH_QT6=ON -DBUILD_TESTS=OFF -DBUILD_TOOLS=ON `
           -DBUILD_PLUGINS="ossl;cyrus-sasl" `
           -DSasl2_ROOT="$pwd/cyrus" -DSASL2_USE_STATIC_LIBS=ON
