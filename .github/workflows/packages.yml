@@ -149,7 +149,19 @@ jobs:
         run: |
           $plugin = Get-ChildItem sdk -Recurse -File | Where-Object { $_.Name -like '*qca-cyrus-sasl*.dll' } | Select-Object -First 1
           if (-not $plugin) { throw 'qca-cyrus-sasl DLL not found' }
-          $deps = (dumpbin /DEPENDENTS $plugin.FullName) | Out-String
+
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) { throw 'vswhere.exe not found' }
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vsPath) { throw 'Visual Studio C++ tools not found' }
+          $dumpbin = Get-ChildItem "$vsPath\VC\Tools\MSVC" -Recurse -File -Filter dumpbin.exe |
+            Where-Object { $_.FullName -match '\\bin\\Hostx64\\x64\\dumpbin\.exe$' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $dumpbin) { throw 'x64 dumpbin.exe not found' }
+
+          $deps = (& $dumpbin.FullName /DEPENDENTS $plugin.FullName) | Out-String
+          if ($LASTEXITCODE -ne 0) { throw "dumpbin failed with exit code $LASTEXITCODE" }
           Write-Host $deps
           if ($deps -match '(?i)(libsasl|sasl2).*\.dll') { throw 'qca-cyrus-sasl unexpectedly depends on shared Cyrus SASL' }
       - name: Pack SDK
