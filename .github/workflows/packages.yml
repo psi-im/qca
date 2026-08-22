@@ -164,13 +164,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "dumpbin failed with exit code $LASTEXITCODE" }
           Write-Host $deps
           if ($deps -match '(?i)(libsasl|sasl2).*\.dll') { throw 'qca-cyrus-sasl unexpectedly depends on shared Cyrus SASL' }
-      - name: Pack SDK
-        shell: bash
-        run: tar -czf "qca3-qt6-${{ matrix.platform }}.tar.gz" -C sdk .
       - uses: actions/upload-artifact@v4
         with:
           name: qca3-qt6-${{ matrix.platform }}
-          path: qca3-qt6-${{ matrix.platform }}.tar.gz
+          path: sdk/
 
   android-sdk:
     needs: ensure_cyrus_bundles
@@ -212,8 +209,7 @@ jobs:
             echo 'qca-cyrus-sasl unexpectedly depends on shared Cyrus SASL' >&2
             exit 1
           fi
-          tar -czf "qca3-qt6-android-${{ matrix.abi }}.tar.gz" -C sdk .
       - uses: actions/upload-artifact@v4
         with:
           name: qca3-qt6-android-${{ matrix.abi }}
-          path: qca3-qt6-android-${{ matrix.abi }}.tar.gz
+          path: sdk/
