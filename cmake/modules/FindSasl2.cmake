@@ -24,16 +24,19 @@ else()
 endif()
 option(SASL2_USE_STATIC_LIBS "Prefer a static Cyrus SASL library" OFF)
 
-set(_sasl2_no_default_path)
+set(_sasl2_path_options)
 if(_sasl2_root)
-  set(_sasl2_no_default_path NO_DEFAULT_PATH)
+  # An explicit package root is already a target installation prefix.  In a
+  # cross build (notably Android), CMake would otherwise prepend the NDK
+  # sysroot to this path and make a private dependency bundle undiscoverable.
+  set(_sasl2_path_options NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 endif()
 
 find_path(SASL2_INCLUDE_DIR
   NAMES sasl/sasl.h
   HINTS "${_sasl2_root}"
   PATH_SUFFIXES include
-  ${_sasl2_no_default_path})
+  ${_sasl2_path_options})
 
 if(SASL2_USE_STATIC_LIBS)
   if(WIN32)
@@ -49,7 +52,7 @@ find_library(SASL2_LIBRARIES
   NAMES ${_sasl2_names}
   HINTS "${_sasl2_root}"
   PATH_SUFFIXES lib lib64
-  ${_sasl2_no_default_path})
+  ${_sasl2_path_options})
 
 find_package_handle_standard_args(Sasl2
   REQUIRED_VARS SASL2_INCLUDE_DIR SASL2_LIBRARIES)
