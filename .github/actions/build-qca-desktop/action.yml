@@ -72,6 +72,26 @@ runs:
         vcpkg install openssl:x64-windows-release --overlay-triplets="$triplets"
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+    - name: Stage OpenSSL runtime on Windows
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $installed = Join-Path $env:VCPKG_INSTALLATION_ROOT 'installed\x64-windows-release'
+        $crypto = Get-ChildItem (Join-Path $installed 'bin') -File -Filter 'libcrypto-*-x64.dll' | Select-Object -First 1
+        $ssl = Get-ChildItem (Join-Path $installed 'bin') -File -Filter 'libssl-*-x64.dll' | Select-Object -First 1
+        if (-not $crypto) { throw 'OpenSSL libcrypto runtime DLL not found' }
+        if (-not $ssl) { throw 'OpenSSL libssl runtime DLL not found' }
+
+        $sdkBin = Join-Path '${{ inputs.install-prefix }}' 'bin'
+        $licenseDir = Join-Path '${{ inputs.install-prefix }}' 'share\licenses\qca3\openssl'
+        New-Item -ItemType Directory -Force -Path $sdkBin, $licenseDir | Out-Null
+        Copy-Item $crypto.FullName $sdkBin
+        Copy-Item $ssl.FullName $sdkBin
+
+        $copyright = Join-Path $installed 'share\openssl\copyright'
+        if (-not (Test-Path $copyright)) { throw 'OpenSSL license file not found' }
+        Copy-Item $copyright (Join-Path $licenseDir 'COPYRIGHT')
+
     - name: Install OpenSSL on macOS
       if: runner.os == 'macOS'
       shell: bash
@@ -99,6 +119,7 @@ runs:
         cmake -S . -B build \
           -DCMAKE_BUILD_TYPE=Release \
           -DCMAKE_INSTALL_PREFIX="${{ inputs.install-prefix }}" \
+          -DCMAKE_INSTALL_NAME_DIR='@rpath' \
           -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
           -DOSX_FRAMEWORK=OFF \
           -DBUILD_WITH_QT6=ON -DBUILD_TESTS=OFF -DBUILD_TOOLS=ON \
