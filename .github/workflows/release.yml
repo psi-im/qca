@@ -1,0 +1,246 @@
+name: QCA3 release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag; leave empty to use the latest v3* tag
+        required: false
+        type: string
+  push:
+    tags: [ 'v3*' ]
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: qca3-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        id: release_tag
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch --force --tags
+
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            tag="$GITHUB_REF_NAME"
+          elif [[ -n "${INPUT_TAG:-}" ]]; then
+            tag="$INPUT_TAG"
+          else
+            tag=$(git tag --list 'v3*' --sort=-version:refname | head -n1)
+          fi
+
+          if [[ -z "$tag" || "$tag" != v3* ]]; then
+            echo "::error::No valid v3* release tag was found"
+            exit 1
+          fi
+          if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "::error::Tag '$tag' does not exist"
+            exit 1
+          fi
+
+          sha=$(git rev-list -n1 "$tag")
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Release tag: $tag ($sha)"
+
+      - name: Check whether release already exists
+        id: existing_release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release_tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            url=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url --jq .url)
+            echo "Release already exists: $url"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Find or run packaging workflow
+        id: packaging
+        if: steps.existing_release.outputs.exists != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release_tag.outputs.tag }}
+          TAG_SHA: ${{ steps.release_tag.outputs.sha }}
+        run: |
+          set -euo pipefail
+
+          expected_artifacts=(
+            qca3-deb-ubuntu-24.04
+            qca3-qt6-windows-x64
+            qca3-qt6-macos-arm64
+            qca3-qt6-macos-x86_64
+            qca3-qt6-android-arm64-v8a
+            qca3-qt6-android-armeabi-v7a
+            qca3-qt6-android-x86_64
+            qca3-qt6-android-x86
+          )
+
+          load_runs() {
+            gh run list --repo "$GITHUB_REPOSITORY" --workflow packages.yml --limit 100 \
+              --json databaseId,headSha,status,conclusion,createdAt > "$RUNNER_TEMP/package-runs.json"
+          }
+
+          latest_successful_run() {
+            jq -r --arg sha "$TAG_SHA" '
+              [.[] | select(.headSha == $sha and .status == "completed" and .conclusion == "success")]
+              | sort_by(.createdAt) | last | .databaseId // empty
+            ' "$RUNNER_TEMP/package-runs.json"
+          }
+
+          latest_active_run() {
+            jq -r --arg sha "$TAG_SHA" '
+              [.[] | select(.headSha == $sha and .status != "completed")]
+              | sort_by(.createdAt) | last | .databaseId // empty
+            ' "$RUNNER_TEMP/package-runs.json"
+          }
+
+          artifacts_complete() {
+            local run_id=$1
+            local names="$RUNNER_TEMP/package-artifacts.txt"
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" \
+              --jq '.artifacts[] | select(.expired == false) | .name' > "$names"
+            for artifact in "${expected_artifacts[@]}"; do
+              if ! grep -Fxq "$artifact" "$names"; then
+                return 1
+              fi
+            done
+          }
+
+          load_runs
+          run_id=$(latest_successful_run)
+          if [[ -n "$run_id" ]] && ! artifacts_complete "$run_id"; then
+            echo "Successful packaging run $run_id has incomplete or expired artifacts; rebuilding"
+            run_id=""
+          fi
+
+          if [[ -z "$run_id" ]]; then
+            # A tag push starts packages.yml independently. Give that run a short
+            # window to appear before dispatching a duplicate workflow.
+            for _ in {1..6}; do
+              load_runs
+              run_id=$(latest_active_run)
+              [[ -n "$run_id" ]] && break
+              sleep 5
+            done
+          fi
+
+          if [[ -z "$run_id" ]]; then
+            load_runs
+            baseline=$(jq -r --arg sha "$TAG_SHA" \
+              '[.[] | select(.headSha == $sha) | .databaseId] | max // 0' \
+              "$RUNNER_TEMP/package-runs.json")
+
+            echo "No reusable packaging run found; dispatching packages.yml for $TAG"
+            gh workflow run packages.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG"
+
+            for _ in {1..24}; do
+              sleep 5
+              load_runs
+              run_id=$(jq -r --arg sha "$TAG_SHA" --argjson baseline "$baseline" '
+                [.[] | select(.headSha == $sha and .databaseId > $baseline)]
+                | sort_by(.databaseId) | last | .databaseId // empty
+              ' "$RUNNER_TEMP/package-runs.json")
+              [[ -n "$run_id" ]] && break
+            done
+
+            if [[ -z "$run_id" ]]; then
+              echo "::error::Packaging workflow was dispatched but no matching run appeared"
+              exit 1
+            fi
+          fi
+
+          echo "Using packaging run $run_id"
+          gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status
+
+          if ! artifacts_complete "$run_id"; then
+            echo "::error::Packaging run $run_id completed without the full artifact set"
+            exit 1
+          fi
+
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Download packaging artifacts
+        if: steps.existing_release.outputs.exists != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.packaging.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p downloaded-artifacts
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --dir downloaded-artifacts
+
+      - name: Prepare release assets
+        if: steps.existing_release.outputs.exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+
+          while IFS= read -r -d '' file; do
+            name=$(basename "$file")
+            if [[ -e "release-assets/$name" ]]; then
+              echo "::error::Duplicate release asset name: $name"
+              exit 1
+            fi
+            cp "$file" "release-assets/$name"
+          done < <(find downloaded-artifacts -type f \( -name '*.deb' -o -name '*.tar.gz' \) -print0)
+
+          expected_tarballs=(
+            qca3-qt6-windows-x64.tar.gz
+            qca3-qt6-macos-arm64.tar.gz
+            qca3-qt6-macos-x86_64.tar.gz
+            qca3-qt6-android-arm64-v8a.tar.gz
+            qca3-qt6-android-armeabi-v7a.tar.gz
+            qca3-qt6-android-x86_64.tar.gz
+            qca3-qt6-android-x86.tar.gz
+          )
+          for asset in "${expected_tarballs[@]}"; do
+            if [[ ! -f "release-assets/$asset" ]]; then
+              echo "::error::Missing release asset: $asset"
+              exit 1
+            fi
+          done
+
+          deb_count=$(find release-assets -maxdepth 1 -type f -name '*.deb' | wc -l)
+          if [[ "$deb_count" -ne 4 ]]; then
+            echo "::error::Expected 4 Debian packages, found $deb_count"
+            exit 1
+          fi
+
+          ls -lh release-assets
+
+      - name: Create GitHub release
+        if: steps.existing_release.outputs.exists != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release_tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --generate-notes \
+            --title "QCA ${TAG#v}"
