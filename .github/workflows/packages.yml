@@ -11,6 +11,7 @@ env:
   CYRUS_REVISION: r5
   CYRUS_TAG: deps-cyrus-sasl-2.1.28-r5
   ANDROID_NDK_VERSION: r27c
+  ANDROID_API: 28
 
 jobs:
   ensure_cyrus_bundles:
@@ -164,13 +165,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "dumpbin failed with exit code $LASTEXITCODE" }
           Write-Host $deps
           if ($deps -match '(?i)(libsasl|sasl2).*\.dll') { throw 'qca-cyrus-sasl unexpectedly depends on shared Cyrus SASL' }
-      - name: Pack SDK
-        shell: bash
-        run: tar -czf "qca3-qt6-${{ matrix.platform }}.tar.gz" -C sdk .
       - uses: actions/upload-artifact@v4
         with:
           name: qca3-qt6-${{ matrix.platform }}
-          path: qca3-qt6-${{ matrix.platform }}.tar.gz
+          path: sdk/
 
   android-sdk:
     needs: ensure_cyrus_bundles
@@ -180,8 +178,6 @@ jobs:
         include:
           - abi: arm64-v8a
             qt_arch: android_arm64_v8a
-          - abi: armeabi-v7a
-            qt_arch: android_armv7
           - abi: x86_64
             qt_arch: android_x86_64
           - abi: x86
@@ -195,6 +191,7 @@ jobs:
           qt-arch: ${{ matrix.qt_arch }}
           abi: ${{ matrix.abi }}
           ndk-version: ${{ env.ANDROID_NDK_VERSION }}
+          android-api: ${{ env.ANDROID_API }}
           cyrus-version: ${{ env.CYRUS_VERSION }}
           cyrus-revision: ${{ env.CYRUS_REVISION }}
           cyrus-tag: ${{ env.CYRUS_TAG }}
@@ -212,8 +209,7 @@ jobs:
             echo 'qca-cyrus-sasl unexpectedly depends on shared Cyrus SASL' >&2
             exit 1
           fi
-          tar -czf "qca3-qt6-android-${{ matrix.abi }}.tar.gz" -C sdk .
       - uses: actions/upload-artifact@v4
         with:
           name: qca3-qt6-android-${{ matrix.abi }}
-          path: qca3-qt6-android-${{ matrix.abi }}.tar.gz
+          path: sdk/

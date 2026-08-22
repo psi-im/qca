@@ -41,10 +41,56 @@ runs:
         gh release download "${{ inputs.cyrus-tag }}" --repo '${{ github.repository }}' -p "$asset"
         tar -xzf "$asset" -C cyrus
 
+    - name: Resolve Windows vcpkg cache key
+      if: runner.os == 'Windows'
+      id: vcpkg-cache-key
+      shell: pwsh
+      run: |
+        $vcpkgRevision = (git -C $env:VCPKG_INSTALLATION_ROOT rev-parse HEAD).Trim()
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+        $vsPath = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
+        $toolsetFile = Join-Path $vsPath 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt'
+        $toolset = (Get-Content $toolsetFile -Raw).Trim()
+        "vcpkg=$vcpkgRevision" >> $env:GITHUB_OUTPUT
+        "msvc=$toolset" >> $env:GITHUB_OUTPUT
+
+    - name: Restore Windows vcpkg binary cache
+      if: runner.os == 'Windows'
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/vcpkg-binary-cache
+        key: qca-vcpkg-openssl-${{ runner.os }}-${{ steps.vcpkg-cache-key.outputs.vcpkg }}-${{ steps.vcpkg-cache-key.outputs.msvc }}-x64-windows-release
+
     - name: Install OpenSSL on Windows
       if: runner.os == 'Windows'
       shell: pwsh
-      run: vcpkg install openssl:x64-windows
+      run: |
+        $cache = Join-Path $env:RUNNER_TEMP 'vcpkg-binary-cache'
+        $triplets = Join-Path $pwd '.github\vcpkg\triplets'
+        New-Item -ItemType Directory -Force -Path $cache | Out-Null
+        $env:VCPKG_BINARY_SOURCES = "clear;files,$cache,readwrite"
+        vcpkg install openssl:x64-windows-release --overlay-triplets="$triplets"
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    - name: Stage OpenSSL runtime on Windows
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $installed = Join-Path $env:VCPKG_INSTALLATION_ROOT 'installed\x64-windows-release'
+        $crypto = Get-ChildItem (Join-Path $installed 'bin') -File -Filter 'libcrypto-*-x64.dll' | Select-Object -First 1
+        $ssl = Get-ChildItem (Join-Path $installed 'bin') -File -Filter 'libssl-*-x64.dll' | Select-Object -First 1
+        if (-not $crypto) { throw 'OpenSSL libcrypto runtime DLL not found' }
+        if (-not $ssl) { throw 'OpenSSL libssl runtime DLL not found' }
+
+        $sdkBin = Join-Path '${{ inputs.install-prefix }}' 'bin'
+        $licenseDir = Join-Path '${{ inputs.install-prefix }}' 'share\licenses\qca3\openssl'
+        New-Item -ItemType Directory -Force -Path $sdkBin, $licenseDir | Out-Null
+        Copy-Item $crypto.FullName $sdkBin
+        Copy-Item $ssl.FullName $sdkBin
+
+        $copyright = Join-Path $installed 'share\openssl\copyright'
+        if (-not (Test-Path $copyright)) { throw 'OpenSSL license file not found' }
+        Copy-Item $copyright (Join-Path $licenseDir 'COPYRIGHT')
 
     - name: Install OpenSSL on macOS
       if: runner.os == 'macOS'
@@ -55,10 +101,13 @@ runs:
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
+        $triplets = Join-Path $pwd '.github\vcpkg\triplets'
         cmake -S . -B build `
           -DCMAKE_BUILD_TYPE=Release `
           -DCMAKE_INSTALL_PREFIX="${{ inputs.install-prefix }}" `
           -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+          -DVCPKG_TARGET_TRIPLET=x64-windows-release `
+          -DVCPKG_OVERLAY_TRIPLETS="$triplets" `
           -DBUILD_WITH_QT6=ON -DBUILD_TESTS=OFF -DBUILD_TOOLS=ON `
           -DBUILD_PLUGINS="ossl;cyrus-sasl" `
           -DSasl2_ROOT="$pwd/cyrus" -DSASL2_USE_STATIC_LIBS=ON
@@ -70,6 +119,7 @@ runs:
         cmake -S . -B build \
           -DCMAKE_BUILD_TYPE=Release \
           -DCMAKE_INSTALL_PREFIX="${{ inputs.install-prefix }}" \
+          -DCMAKE_INSTALL_NAME_DIR='@rpath' \
           -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
           -DOSX_FRAMEWORK=OFF \
           -DBUILD_WITH_QT6=ON -DBUILD_TESTS=OFF -DBUILD_TOOLS=ON \
