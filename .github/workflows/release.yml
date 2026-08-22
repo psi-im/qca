@@ -91,7 +91,6 @@ jobs:
             qca3-qt6-macos-arm64
             qca3-qt6-macos-x86_64
             qca3-qt6-android-arm64-v8a
-            qca3-qt6-android-armeabi-v7a
             qca3-qt6-android-x86_64
             qca3-qt6-android-x86
           )
@@ -196,7 +195,6 @@ jobs:
             qca3-qt6-macos-arm64
             qca3-qt6-macos-x86_64
             qca3-qt6-android-arm64-v8a
-            qca3-qt6-android-armeabi-v7a
             qca3-qt6-android-x86_64
             qca3-qt6-android-x86
           )
@@ -221,8 +219,8 @@ jobs:
           done
 
           count=$(find release-assets -maxdepth 1 -type f -name '*.zip' | wc -l)
-          if [[ "$count" -ne 8 ]]; then
-            echo "::error::Expected 8 release archives, found $count"
+          if [[ "$count" -ne 7 ]]; then
+            echo "::error::Expected 7 release archives, found $count"
             exit 1
           fi
 
