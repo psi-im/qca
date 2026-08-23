@@ -20,7 +20,15 @@ jobs:
       contents: write
 
   debian:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            artifact: qca3-deb-ubuntu-24.04
+          - os: ubuntu-26.04
+            artifact: qca3-deb-ubuntu-26.04
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
@@ -97,7 +105,7 @@ jobs:
           ./consumer-build/qca-consumer
       - uses: actions/upload-artifact@v4
         with:
-          name: qca3-deb-ubuntu-24.04
+          name: ${{ matrix.artifact }}
           path: debs/*.deb
 
   desktop-sdk:
