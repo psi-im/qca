@@ -171,7 +171,20 @@ jobs:
           fi
 
           echo "Using packaging run $run_id"
-          gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status
+          while true; do
+            status=$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json status --jq .status)
+            if [[ "$status" == completed ]]; then
+              break
+            fi
+            echo "Packaging run $run_id is $status"
+            sleep 30
+          done
+
+          conclusion=$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json conclusion --jq .conclusion)
+          if [[ "$conclusion" != success ]]; then
+            echo "::error::Packaging run $run_id completed with conclusion '$conclusion'"
+            exit 1
+          fi
 
           if ! artifacts_complete "$run_id"; then
             echo "::error::Packaging run $run_id completed without the full artifact set"
@@ -236,8 +249,14 @@ jobs:
           TAG: ${{ steps.release_tag.outputs.tag }}
         run: |
           set -euo pipefail
+
+          notes="$RUNNER_TEMP/release-notes.md"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -f tag_name="$TAG" --jq .body > "$notes"
+          sed -E -i 's/ by @[A-Za-z0-9-]+ in / in /g' "$notes"
+
           gh release create "$TAG" release-assets/*.zip \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
-            --generate-notes \
+            --notes-file "$notes" \
             --title "QCA ${TAG#v}"
