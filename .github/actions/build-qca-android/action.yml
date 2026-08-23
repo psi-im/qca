@@ -29,6 +29,15 @@ inputs:
   install-prefix:
     description: CMake install prefix
     required: true
+  build-type:
+    description: CMake build type
+    required: false
+    default: Release
+
+outputs:
+  ndk-path:
+    description: Installed Android NDK path
+    value: ${{ steps.setup-ndk.outputs.ndk-path }}
 
 runs:
   using: composite
@@ -67,7 +76,7 @@ runs:
         test -n "$qt_cmake"
         chmod +x "$qt_cmake"
         "$qt_cmake" -S . -B build -G Ninja \
-          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_BUILD_TYPE="${{ inputs.build-type }}" \
           -DCMAKE_INSTALL_PREFIX="${{ inputs.install-prefix }}" \
           -DANDROID_PLATFORM="android-${{ inputs.android-api }}" \
           -DUSE_RELATIVE_PATHS=ON \

@@ -20,6 +20,10 @@ inputs:
   install-prefix:
     description: CMake install prefix
     required: true
+  build-type:
+    description: CMake build type
+    required: false
+    default: Release
 
 runs:
   using: composite
@@ -103,7 +107,7 @@ runs:
       run: |
         $triplets = Join-Path $pwd '.github\vcpkg\triplets'
         cmake -S . -B build `
-          -DCMAKE_BUILD_TYPE=Release `
+          -DCMAKE_BUILD_TYPE="${{ inputs.build-type }}" `
           -DCMAKE_INSTALL_PREFIX="${{ inputs.install-prefix }}" `
           -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
           -DVCPKG_TARGET_TRIPLET=x64-windows-release `
@@ -118,7 +122,7 @@ runs:
       shell: bash
       run: |
         cmake -S . -B build \
-          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_BUILD_TYPE="${{ inputs.build-type }}" \
           -DCMAKE_INSTALL_PREFIX="${{ inputs.install-prefix }}" \
           -DCMAKE_INSTALL_NAME_DIR='@rpath' \
           -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
@@ -130,4 +134,4 @@ runs:
 
     - name: Build QCA
       shell: bash
-      run: cmake --build build --config Release
+      run: cmake --build build --config "${{ inputs.build-type }}"

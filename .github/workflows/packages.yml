@@ -34,11 +34,11 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build qt6-base-dev libssl-dev libsasl2-dev dpkg-dev
+          sudo apt-get install -y binutils cmake file ninja-build qt6-base-dev libssl-dev libsasl2-dev dpkg-dev
       - name: Build and install
         run: |
           cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=/usr \
             -DBUILD_WITH_QT6=ON -DBUILD_TESTS=OFF -DBUILD_TOOLS=ON \
             -DBUILD_PLUGINS='ossl;cyrus-sasl'
           cmake --build build
@@ -51,7 +51,7 @@ jobs:
           set -euo pipefail
           version=$(sed -n 's/^project(qca VERSION \([^)]*\)).*/\1/p' CMakeLists.txt)
           arch=$(dpkg --print-architecture)
-          mkdir -p debs work/{runtime,dev,plugins,utils}
+          mkdir -p debs debug-debs work/{runtime,dev,plugins,utils} debug-work/{runtime,plugins,utils}
           while IFS= read -r -d '' f; do
             rel=${f#stage/}
             case "$rel" in
@@ -78,11 +78,57 @@ jobs:
           CTRL
             dpkg-deb --build --root-owner-group "$dir" "debs/${pkg}_${version}_${arch}.deb"
           }
+          make_debug_deb() {
+            dir=$1 pkg=$2 depends=$3 desc=$4
+            mkdir -p "$dir/DEBIAN"
+            cat > "$dir/DEBIAN/control" <<CTRL
+          Package: $pkg
+          Version: $version
+          Architecture: $arch
+          Maintainer: Psi IM developers
+          Depends: $depends
+          Section: debug
+          Priority: optional
+          Description: $desc
+          CTRL
+            dpkg-deb --build --root-owner-group "$dir" "debug-debs/${pkg}_${version}_${arch}.deb"
+          }
+          extract_debug_symbols() {
+            dir=$1 debug_dir=$2
+            while IFS= read -r -d '' binary; do
+              if ! file "$binary" | grep -q 'ELF'; then
+                continue
+              fi
+              build_id=$(readelf -n "$binary" | awk '/Build ID:/ {print $3}')
+              if [[ -z "$build_id" ]]; then
+                echo "ELF binary has no build ID: $binary" >&2
+                exit 1
+              fi
+              debug="$debug_dir/usr/lib/debug/.build-id/${build_id:0:2}/${build_id:2}.debug"
+              mkdir -p "$(dirname "$debug")"
+              objcopy --only-keep-debug "$binary" "$debug"
+              strip --strip-unneeded "$binary"
+              test -s "$debug"
+              if readelf -S "$binary" | grep -q '\.debug_'; then
+                echo "Debug sections remain after stripping: $binary" >&2
+                exit 1
+              fi
+            done < <(find "$dir" -type f -print0)
+          }
+
+          extract_debug_symbols work/runtime debug-work/runtime
+          extract_debug_symbols work/plugins debug-work/plugins
+          extract_debug_symbols work/utils debug-work/utils
+          test -n "$(find debug-work -type f -name '*.debug' -print -quit)"
+
           make_deb work/runtime libqca3-qt6-3 'libqt6core6t64, libc6, libstdc++6, libgcc-s1' 'QCA3 Qt6 runtime library'
           make_deb work/plugins libqca3-qt6-plugins 'libqca3-qt6-3, libssl3t64, libsasl2-2' 'QCA3 Qt6 crypto plugins'
           make_deb work/dev libqca3-qt6-dev 'libqca3-qt6-3, qt6-base-dev' 'QCA3 Qt6 development files'
           make_deb work/utils qca3-qt6-utils 'libqca3-qt6-3' 'QCA3 Qt6 command line utilities'
-          ls -l debs
+          make_debug_deb debug-work/runtime libqca3-qt6-3-dbgsym "libqca3-qt6-3 (= $version)" 'QCA3 Qt6 runtime debug symbols'
+          make_debug_deb debug-work/plugins libqca3-qt6-plugins-dbgsym "libqca3-qt6-plugins (= $version)" 'QCA3 Qt6 crypto plugins debug symbols'
+          make_debug_deb debug-work/utils qca3-qt6-utils-dbgsym "qca3-qt6-utils (= $version)" 'QCA3 Qt6 utilities debug symbols'
+          ls -l debs debug-debs
       - name: Install package smoke test
         run: sudo apt-get install -y ./debs/*.deb
       - name: Compile installed CMake consumer
@@ -107,6 +153,11 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: debs/*.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}-symbols
+          path: debug-debs/*.deb
+          if-no-files-found: error
 
   desktop-sdk:
     needs: ensure_cyrus_bundles
@@ -131,7 +182,8 @@ jobs:
           cyrus-revision: ${{ env.CYRUS_REVISION }}
           cyrus-tag: ${{ env.CYRUS_TAG }}
           install-prefix: ${{ github.workspace }}/sdk
-      - run: cmake --install build --config Release
+          build-type: RelWithDebInfo
+      - run: cmake --install build --config RelWithDebInfo
       - name: Install bundled Cyrus SASL license
         shell: bash
         run: |
@@ -173,6 +225,42 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "dumpbin failed with exit code $LASTEXITCODE" }
           Write-Host $deps
           if ($deps -match '(?i)(libsasl|sasl2).*\.dll') { throw 'qca-cyrus-sasl unexpectedly depends on shared Cyrus SASL' }
+      - name: Extract desktop debug symbols and strip SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf symbols
+          mkdir -p symbols
+
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            while IFS= read -r -d '' pdb; do
+              rel=${pdb#build/}
+              mkdir -p "symbols/build/$(dirname "$rel")"
+              cp "$pdb" "symbols/build/$rel"
+            done < <(find build -type f -iname '*.pdb' -print0)
+            while IFS= read -r -d '' pdb; do
+              rel=${pdb#sdk/}
+              mkdir -p "symbols/installed/$(dirname "$rel")"
+              cp "$pdb" "symbols/installed/$rel"
+            done < <(find sdk -type f -iname '*.pdb' -print0)
+            find sdk -type f -iname '*.pdb' -delete
+            test -n "$(find symbols -type f -iname '*.pdb' -print -quit)"
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            while IFS= read -r -d '' binary; do
+              if file "$binary" | grep -q 'Mach-O'; then
+                rel=${binary#sdk/}
+                dsym="symbols/${rel}.dSYM"
+                mkdir -p "$(dirname "$dsym")"
+                dsymutil "$binary" -o "$dsym"
+                strip -S "$binary"
+              fi
+            done < <(find sdk -type f -print0)
+            test -n "$(find symbols -type d -name '*.dSYM' -print -quit)"
+          else
+            echo "Unsupported desktop runner: $RUNNER_OS" >&2
+            exit 1
+          fi
+
       - name: Relocate SDK and prepare consumer
         shell: bash
         run: |
@@ -220,6 +308,11 @@ jobs:
         with:
           name: qca3-qt6-${{ matrix.platform }}
           path: sdk/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qca3-qt6-${{ matrix.platform }}-symbols
+          path: symbols/
+          if-no-files-found: error
 
   android-sdk:
     needs: ensure_cyrus_bundles
@@ -237,6 +330,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/build-qca-android
+        id: build-qca
         with:
           qt-version: ${{ env.QT_VERSION }}
           qt-arch: ${{ matrix.qt_arch }}
@@ -247,6 +341,7 @@ jobs:
           cyrus-revision: ${{ env.CYRUS_REVISION }}
           cyrus-tag: ${{ env.CYRUS_TAG }}
           install-prefix: ${{ github.workspace }}/sdk
+          build-type: RelWithDebInfo
       - name: Install and verify SDK
         shell: bash
         run: |
@@ -260,6 +355,35 @@ jobs:
             echo 'qca-cyrus-sasl unexpectedly depends on shared Cyrus SASL' >&2
             exit 1
           fi
+      - name: Extract Android debug symbols and strip SDK
+        shell: bash
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.build-qca.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+          toolchain_bin="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          llvm_objcopy="$toolchain_bin/llvm-objcopy"
+          llvm_strip="$toolchain_bin/llvm-strip"
+          test -x "$llvm_objcopy"
+          test -x "$llvm_strip"
+
+          rm -rf symbols
+          mkdir -p symbols
+          while IFS= read -r -d '' lib; do
+            rel=${lib#sdk/}
+            debug="symbols/${rel}.debug"
+            mkdir -p "$(dirname "$debug")"
+            "$llvm_objcopy" --only-keep-debug "$lib" "$debug"
+            "$llvm_strip" --strip-unneeded "$lib"
+            "$llvm_objcopy" --add-gnu-debuglink="$debug" "$lib"
+            test -s "$debug"
+            if readelf -S "$lib" | grep -q '\.debug_'; then
+              echo "Debug sections remain after stripping: $lib" >&2
+              exit 1
+            fi
+          done < <(find sdk -type f \( -name '*.so' -o -name '*.so.*' \) -print0)
+          test -n "$(find symbols -type f -name '*.debug' -print -quit)"
+
       - name: Compile consumer after relocating SDK
         shell: bash
         run: |
@@ -292,3 +416,8 @@ jobs:
         with:
           name: qca3-qt6-android-${{ matrix.abi }}
           path: sdk/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qca3-qt6-android-${{ matrix.abi }}-symbols
+          path: symbols/
+          if-no-files-found: error
