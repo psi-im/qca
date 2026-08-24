@@ -79,6 +79,12 @@ if(TARGET OpenSSL::SSL AND TARGET OpenSSL::Crypto)
   target_link_libraries(qca-ossl Qt${QT_MAJOR_VERSION}::Core)
   target_link_libraries(qca-ossl ${QCA_LIB_NAME})
   target_link_libraries(qca-ossl OpenSSL::SSL OpenSSL::Crypto)
+  if(WIN32)
+    # FindOpenSSL can construct OpenSSL targets from raw static archives.
+    # Unlike package-provided targets, those omit OpenSSL's Windows system
+    # libraries; the provider links OpenSSL directly and must carry them.
+    target_link_libraries(qca-ossl ws2_32 crypt32 advapi32 user32 bcrypt)
+  endif()
 
   if(NOT DEVELOPER_MODE)
     install(TARGETS qca-ossl
