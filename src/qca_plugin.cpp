@@ -366,6 +366,14 @@ void ProviderManager::scan()
 #endif
         QDir libpath(dirIt);
         QDir dir(libpath.filePath(PLUGIN_SUBDIR));
+#ifdef Q_OS_ANDROID
+        // Android packages native libraries into one ABI-specific directory.
+        // androiddeployqt encodes plugin type in the library name instead of
+        // preserving the desktop crypto/ subdirectory.
+        const bool androidFlatPluginDirectory = !dir.exists();
+        if (androidFlatPluginDirectory)
+            dir = libpath;
+#endif
         if (!dir.exists()) {
             logDebug(QStringLiteral("  (No 'crypto' subdirectory)"));
             continue;
@@ -382,6 +390,11 @@ void ProviderManager::scan()
 
             const QString filePath = fi.filePath(); // file name with path
             const QString fileName = fi.fileName(); // just file name
+
+#ifdef Q_OS_ANDROID
+            if (androidFlatPluginDirectory && !fileName.startsWith(QStringLiteral("libplugins_crypto_")))
+                continue;
+#endif
 
             if (!QLibrary::isLibrary(filePath)) {
                 logDebug(QStringLiteral("  %1: not a library, skipping").arg(fileName));
