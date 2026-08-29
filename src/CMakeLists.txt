@@ -159,6 +159,8 @@ if(NOT ANDROID)
 endif()
 
 set_target_properties(${QCA_LIB_NAME} PROPERTIES
+                      CXX_VISIBILITY_PRESET hidden
+                      VISIBILITY_INLINES_HIDDEN YES
                       DEFINE_SYMBOL QCA_MAKEDLL
                       PUBLIC_HEADER "${public_HEADERS}"
                       FRAMEWORK ${OSX_FRAMEWORK}
