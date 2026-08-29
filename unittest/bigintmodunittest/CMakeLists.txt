@@ -6,4 +6,4 @@ add_executable(bigintmodunittest ${bigintmodunittest_bin_SRCS})
 
 target_link_qca_test_libraries(bigintmodunittest)
 
-add_qca_test(bigintmodunittest "BigInteger modular arithmetic")
+add_qca_test(bigintmodunittest "BigIntegerModularArithmetic")
