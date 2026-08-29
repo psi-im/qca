@@ -8,6 +8,7 @@ remove_definitions(-DQT_GUI_LIB)
 
 add_subdirectory(base64unittest)
 add_subdirectory(bigintunittest)
+add_subdirectory(bigintmodunittest)
 add_subdirectory(certunittest)
 add_subdirectory(cipherunittest)
 add_subdirectory(clientplugin)
