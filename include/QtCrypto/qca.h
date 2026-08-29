@@ -34,6 +34,7 @@
 #define QCA_H
 
 #include "qca_basic.h"
+#include "qca_bigint.h"
 #include "qca_cert.h"
 #include "qca_core.h"
 #include "qca_keystore.h"
