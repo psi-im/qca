@@ -446,7 +446,7 @@ if(STATIC_PLUGINS)
       string(REPLACE "-" "_" IMPORT_NAME "qca-${PLUGIN}")
       file(APPEND "${CMAKE_BINARY_DIR}/import_plugins.h" "Q_IMPORT_PLUGIN(${IMPORT_NAME})\n")
     endif()
-  endforeach(PLUGIN ${PLUGINS})
+  endforeach(PLUGIN)
 endif()
 
 if(BUILD_TESTS)
