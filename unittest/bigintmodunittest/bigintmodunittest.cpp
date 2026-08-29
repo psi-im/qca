@@ -6,10 +6,25 @@ class BigIntegerModUnitTest : public QObject
     Q_OBJECT
 
 private Q_SLOTS:
+    void initTestCase();
+    void cleanupTestCase();
     void positiveModulo();
     void modularPower();
     void modularInverse();
+
+private:
+    QCA::Initializer *initializer_ = nullptr;
 };
+
+void BigIntegerModUnitTest::initTestCase()
+{
+    initializer_ = new QCA::Initializer;
+}
+
+void BigIntegerModUnitTest::cleanupTestCase()
+{
+    delete initializer_;
+}
 
 void BigIntegerModUnitTest::positiveModulo()
 {
