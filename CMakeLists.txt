@@ -9,7 +9,7 @@ endif()
 # The cmake min. version should be set before calling project(...) too
 cmake_minimum_required(VERSION 3.16)
 
-project(qca VERSION 3.0.0)
+project(qca VERSION 3.0.3)
 
 set(QCA_LIB_MAJOR_VERSION "${PROJECT_VERSION_MAJOR}")
 set(QCA_LIB_MINOR_VERSION "${PROJECT_VERSION_MINOR}")
@@ -395,6 +395,7 @@ set( public_HEADERS
   ${qca_INCLUDEDIR}/QtCrypto/QtCrypto
   ${qca_INCLUDEDIR}/QtCrypto/qca_support.h
   ${qca_INCLUDEDIR}/QtCrypto/qca_tools.h
+  ${qca_INCLUDEDIR}/QtCrypto/qca_bigint.h
   ${qca_INCLUDEDIR}/QtCrypto/qca_core.h
   ${qca_INCLUDEDIR}/QtCrypto/qca_textfilter.h
   ${qca_INCLUDEDIR}/QtCrypto/qca_basic.h

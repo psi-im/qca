@@ -30,6 +30,7 @@ endif()
 
 SET( SOURCES
     qca_tools.cpp
+    qca_bigint.cpp
     qca_plugin.cpp
     qca_textfilter.cpp
     qca_basic.cpp

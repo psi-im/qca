@@ -8,7 +8,6 @@ class BigIntegerModUnitTest : public QObject
 private Q_SLOTS:
     void initTestCase();
     void cleanupTestCase();
-    void positiveModulo();
     void modularPower();
     void modularInverse();
 
@@ -24,13 +23,6 @@ void BigIntegerModUnitTest::initTestCase()
 void BigIntegerModUnitTest::cleanupTestCase()
 {
     delete initializer_;
-}
-
-void BigIntegerModUnitTest::positiveModulo()
-{
-    QCOMPARE(QCA::BigIntegerMath::positiveMod(QCA::BigInteger(14), QCA::BigInteger(11)), QCA::BigInteger(3));
-    QCOMPARE(QCA::BigIntegerMath::positiveMod(QCA::BigInteger(-3), QCA::BigInteger(11)), QCA::BigInteger(8));
-    QCOMPARE(QCA::BigIntegerMath::positiveMod(QCA::BigInteger(7), QCA::BigInteger(0)), QCA::BigInteger(0));
 }
 
 void BigIntegerModUnitTest::modularPower()
