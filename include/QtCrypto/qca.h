@@ -96,8 +96,14 @@ inline BigInteger modPow(const BigInteger &base, const BigInteger &exponent, con
 
         power /= two;
         if (power != zero) {
-            factor *= factor;
-            factor %= modulus;
+            // The bundled Botan BigInt multiplication is not guaranteed to
+            // support the same object as both input and output for large
+            // values.  Keep the right-hand operand on the original shared
+            // data while the left-hand copy detaches before multiplication.
+            BigInteger squared(factor);
+            squared *= factor;
+            squared %= modulus;
+            factor = squared;
         }
     }
 
