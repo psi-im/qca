@@ -97,19 +97,14 @@ QString SecureFile::errorString() const
 
 #ifdef Q_OS_WIN
 
-static bool validExistingWindowsTarget(const QString &fileName, bool *exists)
+static bool validExistingWindowsTarget(const QString &fileName)
 {
     const DWORD attributes = GetFileAttributesW(reinterpret_cast<LPCWSTR>(fileName.utf16()));
     if (attributes == INVALID_FILE_ATTRIBUTES) {
         const DWORD error = GetLastError();
-        if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
-            *exists = false;
-            return true;
-        }
-        return false;
+        return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
     }
 
-    *exists = true;
     return !(attributes & FILE_ATTRIBUTE_DIRECTORY) && !(attributes & FILE_ATTRIBUTE_REPARSE_POINT);
 }
 
@@ -211,8 +206,7 @@ bool SecureFile::write(const SecureArray &data)
         return false;
     }
 
-    bool targetExists = false;
-    if (!validExistingWindowsTarget(d->fileName, &targetExists)) {
+    if (!validExistingWindowsTarget(d->fileName)) {
         d->setError(InvalidFile, QStringLiteral("Secure file target is not a regular file"));
         return false;
     }
@@ -447,7 +441,12 @@ bool SecureFile::write(const SecureArray &data)
         return false;
     }
     setCloseOnExec(fd);
-    fchmod(fd, S_IRUSR | S_IWUSR);
+    if (fchmod(fd, S_IRUSR | S_IWUSR) != 0) {
+        ::close(fd);
+        ::unlink(encodedTemporary.constData());
+        d->setError(OpenError, QStringLiteral("Unable to restrict secure temporary file permissions"));
+        return false;
+    }
 
     qint64 written = 0;
     while (written < data.size()) {
