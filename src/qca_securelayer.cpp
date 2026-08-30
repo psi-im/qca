@@ -1803,6 +1803,11 @@ private Q_SLOTS:
                         return;
                     }
 
+                    // The provider may finalize the selected mechanism only
+                    // after client parameters have been supplied.  In
+                    // particular, qca-cyrus-sasl maps SCRAM to its -PLUS
+                    // variant after channel binding has been configured.
+                    mech  = c->mech();
                     first = false;
                     actionQueue += Action(Action::ClientStarted, c->haveClientInit(), c->stepData());
                     if (r == SASLContext::Success)
