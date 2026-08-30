@@ -42,6 +42,7 @@ SET( SOURCES
     qca_publickey.cpp
     qca_safeobj.cpp
     qca_safetimer.cpp
+    qca_securefile.cpp
     qca_securelayer.cpp
     qca_securemessage.cpp
     support/qpipe.cpp
@@ -50,6 +51,11 @@ SET( SOURCES
     support/dirwatch.cpp
     support/syncthread.cpp
 )
+
+# qca_securefile.h is intentionally added here rather than to the historical
+# root public_HEADERS list so the implementation and its install surface stay
+# together.
+list(APPEND public_HEADERS ${qca_INCLUDEDIR}/QtCrypto/qca_securefile.h)
 
 if(ANDROID)
   set(SOURCES ${SOURCES} qca_systemstore_android.cpp)

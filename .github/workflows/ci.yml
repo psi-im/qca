@@ -18,6 +18,8 @@ jobs:
   ensure_cyrus_bundles:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/deps-cyrus-sasl.yml
+    with:
+      include_android_x86: false
     permissions:
       contents: write
 
@@ -39,7 +41,6 @@ jobs:
             "cyrus-sasl-${CYRUS_VERSION}-${CYRUS_REVISION}-macos-x86_64.tar.gz"
             "cyrus-sasl-${CYRUS_VERSION}-${CYRUS_REVISION}-android-arm64-v8a.tar.gz"
             "cyrus-sasl-${CYRUS_VERSION}-${CYRUS_REVISION}-android-x86_64.tar.gz"
-            "cyrus-sasl-${CYRUS_VERSION}-${CYRUS_REVISION}-android-x86.tar.gz"
           )
           if ! gh release view "$CYRUS_TAG" --repo '${{ github.repository }}' >/dev/null 2>&1; then
             echo "::error::Required dependency release '$CYRUS_TAG' does not exist yet. Merge/run CI on the trusted branch once so it can bootstrap the dependency bundles."
@@ -85,6 +86,96 @@ jobs:
             -DBUILD_TESTS=ON
       - run: cmake --build build
       - run: ctest --test-dir build --output-on-failure
+
+  windows-qt5:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up MSYS2 MINGW64 Qt5
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-qt5-base
+            mingw-w64-x86_64-openssl
+      - name: Verify Windows 7 target baseline
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          macros=$(printf '#include <windows.h>\n' | \
+            gcc -D_WIN32_WINNT=0x0601 -DWINVER=0x0601 -dM -E -x c -)
+          grep -Eq '^#define _WIN32_WINNT 0x0601([[:space:]]|$)' <<< "$macros"
+          grep -Eq '^#define WINVER 0x0601([[:space:]]|$)' <<< "$macros"
+      - name: Configure QCA3 Qt5
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/sdk" \
+            -DCMAKE_C_FLAGS='-D_WIN32_WINNT=0x0601 -DWINVER=0x0601' \
+            -DCMAKE_CXX_FLAGS='-D_WIN32_WINNT=0x0601 -DWINVER=0x0601' \
+            -DBUILD_WITH_QT6=OFF \
+            -DBUILD_SHARED_LIBS=ON \
+            -DBUILD_TESTS=ON \
+            -DBUILD_TOOLS=OFF \
+            -DBUILD_PLUGINS=ossl \
+            -DLOAD_SHARED_PLUGINS=ON \
+            -DQCA_SUFFIX=qt5 \
+            -DUSE_RELATIVE_PATHS=ON
+      - name: Build and test QCA3 Qt5
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+          cmake --install build
+          test -f sdk/lib/cmake/Qca3-qt5/Qca3-qt5Config.cmake
+          test -f sdk/include/Qca3-qt5/QtCrypto/qca_securefile.h
+          test -n "$(find sdk/bin -type f -iname '*qca3-qt5*.dll' -print -quit)"
+          test -n "$(find sdk -type f -iname '*qca-ossl*.dll' -print -quit)"
+      - name: Verify relocated QCA3 Qt5 SDK consumer
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          mv sdk relocated-sdk
+          mkdir consumer
+          cat > consumer/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.16)
+          project(qca_consumer LANGUAGES CXX)
+          find_package(Qca3-qt5 CONFIG REQUIRED)
+          add_executable(qca-consumer main.cpp)
+          target_link_libraries(qca-consumer PRIVATE Qca3::Qca)
+          CMAKE
+          cat > consumer/main.cpp <<'CPP'
+          #include <QtCrypto>
+          int main()
+          {
+              QCA::Initializer init;
+              QCA::SecureFile file(QStringLiteral("unused"));
+              return file.maximumSize() > 0 ? 0 : 1;
+          }
+          CPP
+          cmake -S consumer -B consumer-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            "-DCMAKE_PREFIX_PATH=$PWD/relocated-sdk;/mingw64" \
+            "-DQca3-qt5_DIR=$PWD/relocated-sdk/lib/cmake/Qca3-qt5"
+          cmake --build consumer-build --parallel 2
+          PATH="$PWD/relocated-sdk/bin:/mingw64/bin:$PATH" ./consumer-build/qca-consumer.exe
+          mv relocated-sdk sdk
+      - name: Upload QCA3 Qt5 SDK
+        uses: actions/upload-artifact@v4
+        with:
+          name: qca3-qt5-windows-x64
+          path: sdk/
+          if-no-files-found: error
+          retention-days: 14
 
   desktop:
     if: always() && needs.cyrus_ready.result == 'success'
@@ -171,8 +262,6 @@ jobs:
             qt_arch: android_arm64_v8a
           - abi: x86_64
             qt_arch: android_x86_64
-          - abi: x86
-            qt_arch: android_x86
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

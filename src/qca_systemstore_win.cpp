@@ -18,8 +18,11 @@
  *
  */
 
-// need to define this immediately
+// Windows headers need this before they are included. Respect an application
+// or toolchain target when one has already been selected.
+#ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x400
+#endif
 
 #include "qca_systemstore.h"
 
