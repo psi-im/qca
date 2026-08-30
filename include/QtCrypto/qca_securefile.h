@@ -30,11 +30,21 @@ namespace QCA {
    destination directory and atomically replace the destination after the
    data has been flushed.
 
+   Where a simple and reliable platform facility is available, SecureFile
+   also asks the operating system to avoid or promptly discard filesystem
+   cache pages containing the file data. These cache-control requests are
+   advisory and best-effort. Some platforms and filesystems may still use
+   normal kernel caching.
+
    The returned SecureArray is empty both for an empty file and after a
    failed read. Check error() to distinguish these cases.
 
-   SecureFile protects secret material while it is being transferred to and
-   from the filesystem. It does not encrypt file contents at rest.
+   SecureFile minimizes ordinary userspace copies and filesystem-cache
+   residency of secret material. It does not encrypt file contents at rest
+   and it cannot guarantee that plaintext never remains in kernel/page
+   caches, filesystem or storage-device caches, crash dumps, swap, or old
+   storage blocks after a file is replaced. Applications requiring strong
+   at-rest secrecy should use encrypted storage in addition to SecureFile.
 
    \ingroup UserAPI
 */
@@ -81,6 +91,10 @@ public:
     /**
        Read the complete regular file directly into secure memory.
 
+       No ordinary userspace byte buffer is used for the file contents.
+       Filesystem-cache avoidance is best-effort as described in the class
+       documentation.
+
        On failure an empty SecureArray is returned and error() describes the
        failure.
     */
@@ -90,7 +104,8 @@ public:
        Atomically replace the file with \a data.
 
        Secret bytes are written directly from SecureArray storage. On Unix,
-       newly written files are created with mode 0600.
+       newly written files are created with mode 0600. Filesystem-cache
+       avoidance is best-effort as described in the class documentation.
     */
     bool write(const SecureArray &data);
 
