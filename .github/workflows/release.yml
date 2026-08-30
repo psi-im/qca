@@ -34,7 +34,7 @@ jobs:
           INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          git fetch --force origin master
+          git fetch --force origin master:refs/remotes/origin/master
           git fetch --force --tags
 
           if [[ "$GITHUB_EVENT_NAME" == push ]]; then
