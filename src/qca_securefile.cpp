@@ -121,7 +121,7 @@ SecureArray SecureFile::read()
                                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                                 nullptr,
                                 OPEN_EXISTING,
-                                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+                                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
                                 nullptr);
     if (handle == INVALID_HANDLE_VALUE) {
         d->setError(OpenError, QStringLiteral("Unable to open secure file"));
