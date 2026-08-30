@@ -100,6 +100,7 @@ jobs:
             qca3-deb-ubuntu-24.04-symbols
             qca3-deb-ubuntu-26.04
             qca3-deb-ubuntu-26.04-symbols
+            qca3-qt5-windows-x64
             qca3-qt6-windows-x64
             qca3-qt6-windows-x64-symbols
             qca3-qt6-macos-arm64
@@ -226,6 +227,7 @@ jobs:
             qca3-deb-ubuntu-24.04-symbols
             qca3-deb-ubuntu-26.04
             qca3-deb-ubuntu-26.04-symbols
+            qca3-qt5-windows-x64
             qca3-qt6-windows-x64
             qca3-qt6-windows-x64-symbols
             qca3-qt6-macos-arm64
@@ -260,8 +262,8 @@ jobs:
           done
 
           count=$(find release-assets -maxdepth 1 -type f -name '*.zip' | wc -l)
-          if [[ "$count" -ne 16 ]]; then
-            echo "::error::Expected 16 release archives, found $count"
+          if [[ "$count" -ne 17 ]]; then
+            echo "::error::Expected 17 release archives, found $count"
             exit 1
           fi
 
