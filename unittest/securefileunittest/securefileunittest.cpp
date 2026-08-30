@@ -19,6 +19,8 @@ class SecureFileUnitTest : public QObject
     Q_OBJECT
 
 private Q_SLOTS:
+    void initTestCase();
+    void cleanupTestCase();
     void roundTrip();
     void overwrite();
     void emptyFile();
@@ -28,7 +30,21 @@ private Q_SLOTS:
     void rejectSymlink();
     void privatePermissions();
 #endif
+
+private:
+    QCA::Initializer *m_init = nullptr;
 };
+
+void SecureFileUnitTest::initTestCase()
+{
+    m_init = new QCA::Initializer;
+}
+
+void SecureFileUnitTest::cleanupTestCase()
+{
+    delete m_init;
+    m_init = nullptr;
+}
 
 void SecureFileUnitTest::roundTrip()
 {
