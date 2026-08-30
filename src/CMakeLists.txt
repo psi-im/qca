@@ -42,6 +42,7 @@ SET( SOURCES
     qca_publickey.cpp
     qca_safeobj.cpp
     qca_safetimer.cpp
+    qca_securefile.cpp
     qca_securelayer.cpp
     qca_securemessage.cpp
     support/qpipe.cpp
