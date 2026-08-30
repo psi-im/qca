@@ -52,6 +52,11 @@ SET( SOURCES
     support/syncthread.cpp
 )
 
+# qca_securefile.h is intentionally added here rather than to the historical
+# root public_HEADERS list so the implementation and its install surface stay
+# together.
+list(APPEND public_HEADERS ${qca_INCLUDEDIR}/QtCrypto/qca_securefile.h)
+
 if(ANDROID)
   set(SOURCES ${SOURCES} qca_systemstore_android.cpp)
 elseif(WIN32)
@@ -144,7 +149,7 @@ endif()
 if(APPLE AND NOT IOS)
   set(COREFOUNDATION_LIBRARY "-framework CoreFoundation")
   set(COREFOUNDATION_LIBRARY_SECURITY "-framework Security")
-  TARGET_LINK_LIBRARIES(${QCA_LIB_NAME} PRIVATE ${COREFOUNDATION_LIBRARY} ${COREFOUNDATION_LIBRARY_SECURITY})
+  TARGET_LINK_LIBRARIES(${QCA_LIB_NAME} PRIVATE ${COREFOUNDATION_LIBRARY} ${QCA_COREFOUNDATION_LIBRARY_SECURITY})
 
   if(NOT USE_RELATIVE_PATHS)
     set_target_properties(${QCA_LIB_NAME} PROPERTIES
