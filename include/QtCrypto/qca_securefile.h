@@ -34,7 +34,8 @@ namespace QCA {
    also asks the operating system to avoid or promptly discard filesystem
    cache pages containing the file data. These cache-control requests are
    advisory and best-effort. Some platforms and filesystems may still use
-   normal kernel caching.
+   normal kernel caching. In particular, SecureFile intentionally does not
+   use alignment-sensitive unbuffered/direct I/O merely to bypass the cache.
 
    The returned SecureArray is empty both for an empty file and after a
    failed read. Check error() to distinguish these cases.
