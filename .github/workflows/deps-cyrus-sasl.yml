@@ -2,7 +2,19 @@ name: Cyrus SASL dependency bundles
 
 on:
   workflow_call:
+    inputs:
+      include_android_x86:
+        description: Build the legacy 32-bit Android x86 dependency bundle
+        required: false
+        type: boolean
+        default: true
   workflow_dispatch:
+    inputs:
+      include_android_x86:
+        description: Build the legacy 32-bit Android x86 dependency bundle
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -24,11 +36,32 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.vars.outputs.tag }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
       - id: vars
         shell: bash
         run: echo "tag=deps-cyrus-sasl-${CYRUS_VERSION}-${CYRUS_REVISION}" >> "$GITHUB_OUTPUT"
+      - id: matrix
+        shell: bash
+        env:
+          INCLUDE_ANDROID_X86: ${{ inputs.include_android_x86 }}
+        run: |
+          set -euo pipefail
+          matrix=$(cat <<'JSON'
+          [
+            {"os":"windows-latest","platform":"windows-x64","kind":"windows"},
+            {"os":"macos-15","platform":"macos-arm64","kind":"unix"},
+            {"os":"macos-15-intel","platform":"macos-x86_64","kind":"unix"},
+            {"os":"ubuntu-latest","platform":"android-arm64-v8a","kind":"android","abi":"arm64-v8a","host":"aarch64-linux-android","clang":"aarch64-linux-android","openssl_target":"android-arm64"},
+            {"os":"ubuntu-latest","platform":"android-x86_64","kind":"android","abi":"x86_64","host":"x86_64-linux-android","clang":"x86_64-linux-android","openssl_target":"android-x86_64"}
+          ]
+          JSON
+          )
+          if [[ "${INCLUDE_ANDROID_X86:-true}" == true ]]; then
+            matrix=$(jq -c '. + [{"os":"ubuntu-latest","platform":"android-x86","kind":"android","abi":"x86","host":"i686-linux-android","clang":"i686-linux-android","openssl_target":"android-x86"}]' <<< "$matrix")
+          fi
+          echo "matrix={\"include\":$(jq -c . <<< "$matrix")}" >> "$GITHUB_OUTPUT"
       - env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.vars.outputs.tag }}
@@ -40,38 +73,7 @@ jobs:
     needs: prepare
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            platform: windows-x64
-            kind: windows
-          - os: macos-15
-            platform: macos-arm64
-            kind: unix
-          - os: macos-15-intel
-            platform: macos-x86_64
-            kind: unix
-          - os: ubuntu-latest
-            platform: android-arm64-v8a
-            kind: android
-            abi: arm64-v8a
-            host: aarch64-linux-android
-            clang: aarch64-linux-android
-            openssl_target: android-arm64
-          - os: ubuntu-latest
-            platform: android-x86_64
-            kind: android
-            abi: x86_64
-            host: x86_64-linux-android
-            clang: x86_64-linux-android
-            openssl_target: android-x86_64
-          - os: ubuntu-latest
-            platform: android-x86
-            kind: android
-            abi: x86
-            host: i686-linux-android
-            clang: i686-linux-android
-            openssl_target: android-x86
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
