@@ -228,7 +228,7 @@ bool SecureFile::write(const SecureArray &data)
                                 0,
                                 nullptr,
                                 CREATE_NEW,
-                                FILE_ATTRIBUTE_TEMPORARY | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED,
+                                FILE_ATTRIBUTE_NOT_CONTENT_INDEXED | FILE_FLAG_WRITE_THROUGH,
                                 nullptr);
         if (temporary != INVALID_HANDLE_VALUE)
             break;
@@ -286,6 +286,30 @@ static void setCloseOnExec(int fd)
 #endif
 }
 
+static void enableCacheAvoidance(int fd)
+{
+#if (defined(Q_OS_MACOS) || defined(Q_OS_MAC)) && defined(F_NOCACHE)
+    (void)fcntl(fd, F_NOCACHE, 1);
+#else
+    Q_UNUSED(fd)
+#endif
+}
+
+static void discardFileCache(int fd)
+{
+#ifdef POSIX_FADV_DONTNEED
+    (void)posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
+#else
+    Q_UNUSED(fd)
+#endif
+}
+
+static void closeReadFile(int fd)
+{
+    discardFileCache(fd);
+    ::close(fd);
+}
+
 SecureArray SecureFile::read()
 {
     d->clearError();
@@ -324,10 +348,11 @@ SecureArray SecureFile::read()
         return SecureArray();
     }
     setCloseOnExec(fd);
+    enableCacheAvoidance(fd);
 
     struct stat info;
     if (fstat(fd, &info) != 0 || !S_ISREG(info.st_mode)) {
-        ::close(fd);
+        closeReadFile(fd);
         d->setError(InvalidFile, QStringLiteral("Secure file is not a regular file"));
         return SecureArray();
     }
@@ -335,7 +360,7 @@ SecureArray SecureFile::read()
     struct stat pathInfoAfter;
     if (lstat(encodedName.constData(), &pathInfoAfter) != 0 || S_ISLNK(pathInfoAfter.st_mode)
         || pathInfoAfter.st_dev != info.st_dev || pathInfoAfter.st_ino != info.st_ino) {
-        ::close(fd);
+        closeReadFile(fd);
         d->setError(InvalidFile, QStringLiteral("Secure file changed while it was opened"));
         return SecureArray();
     }
@@ -343,7 +368,7 @@ SecureArray SecureFile::read()
 
     const qint64 limit = d->effectiveMaximumSize();
     if (info.st_size < 0 || static_cast<quint64>(info.st_size) > static_cast<quint64>(limit)) {
-        ::close(fd);
+        closeReadFile(fd);
         d->setError(TooLarge, QStringLiteral("Secure file exceeds the configured size limit"));
         return SecureArray();
     }
@@ -361,12 +386,12 @@ SecureArray SecureFile::read()
                     count = ::read(fd, probe.data(), 1);
                 } while (count < 0 && errno == EINTR);
                 if (count < 0) {
-                    ::close(fd);
+                    closeReadFile(fd);
                     d->setError(ReadError, QStringLiteral("Unable to read secure file"));
                     return SecureArray();
                 }
                 if (count != 0) {
-                    ::close(fd);
+                    closeReadFile(fd);
                     d->setError(TooLarge, QStringLiteral("Secure file exceeds the configured size limit"));
                     return SecureArray();
                 }
@@ -375,7 +400,7 @@ SecureArray SecureFile::read()
 
             const qint64 next = std::min<qint64>(limit, used + 64 * 1024);
             if (!result.resize(static_cast<int>(next))) {
-                ::close(fd);
+                closeReadFile(fd);
                 d->setError(ReadError, QStringLiteral("Unable to allocate secure file buffer"));
                 return SecureArray();
             }
@@ -387,7 +412,7 @@ SecureArray SecureFile::read()
             count = ::read(fd, result.data() + used, static_cast<size_t>(capacity - used));
         } while (count < 0 && errno == EINTR);
         if (count < 0) {
-            ::close(fd);
+            closeReadFile(fd);
             d->setError(ReadError, QStringLiteral("Unable to read secure file"));
             return SecureArray();
         }
@@ -396,7 +421,7 @@ SecureArray SecureFile::read()
         used += count;
     }
 
-    ::close(fd);
+    closeReadFile(fd);
     if (result.size() != used)
         result.resize(static_cast<int>(used));
     return result;
@@ -441,6 +466,7 @@ bool SecureFile::write(const SecureArray &data)
         return false;
     }
     setCloseOnExec(fd);
+    enableCacheAvoidance(fd);
     if (fchmod(fd, S_IRUSR | S_IWUSR) != 0) {
         ::close(fd);
         ::unlink(encodedTemporary.constData());
@@ -473,6 +499,7 @@ bool SecureFile::write(const SecureArray &data)
         d->setError(WriteError, QStringLiteral("Unable to flush secure temporary file"));
         return false;
     }
+    discardFileCache(fd);
     ::close(fd);
 
     if (::rename(encodedTemporary.constData(), encodedTarget.constData()) != 0) {
