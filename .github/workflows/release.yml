@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag; leave empty to use the latest v3* tag
+        description: Release tag; if missing, create it at current master; leave empty to use the latest v3* tag
         required: false
         type: string
   push:
@@ -34,6 +34,7 @@ jobs:
           INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
+          git fetch --force origin master
           git fetch --force --tags
 
           if [[ "$GITHUB_EVENT_NAME" == push ]]; then
@@ -48,12 +49,21 @@ jobs:
             echo "::error::No valid v3* release tag was found"
             exit 1
           fi
+
           if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-            echo "::error::Tag '$tag' does not exist"
-            exit 1
+            if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch || -z "${INPUT_TAG:-}" ]]; then
+              echo "::error::Tag '$tag' does not exist"
+              exit 1
+            fi
+
+            sha=$(git rev-parse refs/remotes/origin/master)
+            echo "Tag '$tag' does not exist; creating it at current master ($sha)"
+            git tag "$tag" "$sha"
+            git push origin "refs/tags/$tag"
+          else
+            sha=$(git rev-list -n1 "$tag")
           fi
 
-          sha=$(git rev-list -n1 "$tag")
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "Release tag: $tag ($sha)"
