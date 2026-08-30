@@ -18,7 +18,7 @@ class SecureFileUnitTest : public QObject
 {
     Q_OBJECT
 
-private slots:
+private Q_SLOTS:
     void roundTrip();
     void overwrite();
     void emptyFile();
@@ -52,7 +52,7 @@ void SecureFileUnitTest::roundTrip()
 
     const QCA::SecureArray actual = file.read();
     QCOMPARE(file.error(), QCA::SecureFile::NoError);
-    QCOMPARE(actual, expected);
+    QVERIFY(actual == expected);
 }
 
 void SecureFileUnitTest::overwrite()
@@ -66,7 +66,7 @@ void SecureFileUnitTest::overwrite()
 
     const QCA::SecureArray actual = file.read();
     QCOMPARE(file.error(), QCA::SecureFile::NoError);
-    QCOMPARE(actual, QCA::SecureArray("second secret"));
+    QVERIFY(actual == QCA::SecureArray("second secret"));
 }
 
 void SecureFileUnitTest::emptyFile()
