@@ -65,9 +65,12 @@ QStringList srtpProviders()
 class DTLSSRTPPair : public QObject
 {
 public:
-    DTLSSRTPPair(const QCA::Certificate &certificate, const QCA::PrivateKey &privateKey, const QString &provider)
-        : m_client(QCA::TLS::Datagram, this, provider)
-        , m_server(QCA::TLS::Datagram, this, provider)
+    DTLSSRTPPair(const QCA::Certificate &certificate,
+                 const QCA::PrivateKey  &privateKey,
+                 const QString          &provider,
+                 QCA::TLS::Mode          mode = QCA::TLS::Datagram)
+        : m_client(mode, this, provider)
+        , m_server(mode, this, provider)
     {
         QCA::CertificateCollection trusted;
         trusted.addCertificate(certificate);
@@ -83,6 +86,21 @@ public:
         connect(&m_server, &QCA::TLS::handshaken, this, [this]() { handshaken(m_server, false); });
         connect(&m_client, &QCA::TLS::error, this, [this]() { failed(QStringLiteral("client"), m_client); });
         connect(&m_server, &QCA::TLS::error, this, [this]() { failed(QStringLiteral("server"), m_server); });
+    }
+
+    void setCiphers(const QStringList &client, const QStringList &server)
+    {
+        m_client.setConstraints(client);
+        m_server.setConstraints(server);
+    }
+    void setSSF(int minimum, int maximum)
+    {
+        m_client.setConstraints(minimum, maximum);
+        m_server.setConstraints(minimum, maximum);
+    }
+    QString clientCipher() const
+    {
+        return m_client.cipherSuite();
     }
 
     bool setProfiles(const QStringList &clientProfiles, const QStringList &serverProfiles)
@@ -195,6 +213,7 @@ private Q_SLOTS:
     void initTestCase();
     void cleanupTestCase();
     void apiValidation();
+    void cipherConstraints();
     void negotiateAndExport_data();
     void negotiateAndExport();
 
@@ -211,6 +230,55 @@ void DTLSSRTPUnitTest::cleanupTestCase()
 {
     delete m_init;
     m_init = nullptr;
+}
+
+void DTLSSRTPUnitTest::cipherConstraints()
+{
+    const QString provider = QStringLiteral("qca-ossl");
+    if (!QCA::isSupported("dtls", provider))
+        QSKIP("qca-ossl DTLS provider is not available");
+    const auto cert = QCA::Certificate::fromPEMFile(QStringLiteral("dtlssrtp-certs/default.crt"));
+    const auto key  = QCA::PrivateKey::fromPEMFile(QStringLiteral("dtlssrtp-certs/default.key"));
+    QVERIFY(!cert.isNull() && !key.isNull());
+    const QString a = QStringLiteral("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256");
+    const QString b = QStringLiteral("TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384");
+    for (auto mode : {QCA::TLS::Stream, QCA::TLS::Datagram}) {
+        DTLSSRTPPair valid(cert, key, provider, mode);
+        valid.setCiphers({a}, {a});
+        QVERIFY2(valid.run(), qPrintable(valid.errorString()));
+        QCOMPARE(valid.clientCipher(), a);
+        DTLSSRTPPair native(cert, key, provider, mode);
+        native.setCiphers({QStringLiteral("ECDHE-RSA-AES128-GCM-SHA256")}, {a});
+        QVERIFY2(native.run(), qPrintable(native.errorString()));
+        QCOMPARE(native.clientCipher(), a);
+        DTLSSRTPPair mismatch(cert, key, provider, mode);
+        mismatch.setCiphers({a}, {b});
+        QVERIFY(!mismatch.run());
+        // DTLS may silently discard an incompatible ClientHello and await a retry.
+        if (mode == QCA::TLS::Stream)
+            QVERIFY(!mismatch.errorString().contains(QStringLiteral("Timed out")));
+        for (const auto &list : {QStringList {},
+                                 QStringList {QStringLiteral("invalid-suite")},
+                                 QStringList {a, QStringLiteral("invalid-suite")}}) {
+            DTLSSRTPPair invalid(cert, key, provider, mode);
+            invalid.setCiphers(list, {a});
+            QVERIFY(!invalid.run());
+            QVERIFY(!invalid.errorString().contains(QStringLiteral("Timed out")));
+        }
+        DTLSSRTPPair strength(cert, key, provider, mode);
+        strength.setSSF(128, 128);
+        QVERIFY2(strength.run(), qPrintable(strength.errorString()));
+        QVERIFY(strength.clientCipher().contains(QStringLiteral("AES_128")));
+        DTLSSRTPPair impossible(cert, key, provider, mode);
+        impossible.setSSF(512, 512);
+        QVERIFY(!impossible.run());
+        QVERIFY(!impossible.errorString().contains(QStringLiteral("Timed out")));
+    }
+    DTLSSRTPPair  modern(cert, key, provider, QCA::TLS::Stream);
+    const QString tls13 = QStringLiteral("TLS_AES_128_GCM_SHA256");
+    modern.setCiphers({tls13}, {tls13});
+    QVERIFY2(modern.run(), qPrintable(modern.errorString()));
+    QCOMPARE(modern.clientCipher(), tls13);
 }
 
 void DTLSSRTPUnitTest::apiValidation()

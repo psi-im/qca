@@ -51,6 +51,11 @@ public:
         Closing
     };
 
+    bool        applyConstraints();
+    bool        constraintSSF = true;
+    int         constraintMin = 128, constraintMax = -1;
+    QStringList constraintSuites;
+
     bool serv; // true if we are acting as a server
     int  mode;
 

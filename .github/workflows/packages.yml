@@ -31,6 +31,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -49,7 +51,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version=$(sed -n 's/^project(qca VERSION \([^)]*\)).*/\1/p' CMakeLists.txt)
+          version=$(cat build/qca-version.txt)
           arch=$(dpkg --print-architecture)
           mkdir -p debs debug-debs work/{runtime,dev,plugins,utils} debug-work/{runtime,plugins,utils}
           while IFS= read -r -d '' f; do
@@ -63,8 +65,31 @@ jobs:
             mkdir -p "work/$dst/$(dirname "$rel")"
             cp -a "$f" "work/$dst/$rel"
           done < <(find stage \( -type f -o -type l \) -print0)
+          # Let dpkg derive versioned dependencies from symbols, including Qt's
+          # qt_version_tag. The private shlibs entry resolves our staged runtime.
+          mkdir -p dependency-scan/debian work/runtime/DEBIAN
+          printf 'Source: qca3\nMaintainer: Psi IM developers\n\nPackage: qca3-scan\nArchitecture: any\nDescription: dependency scan\n' > dependency-scan/debian/control
+          printf 'libqca3-qt6 3 libqca3-qt6-3 (= %s)\n' "$version" > work/runtime/DEBIAN/shlibs
+          printf 'activate-noawait ldconfig\n' > work/runtime/DEBIAN/triggers
+          runtime_lib=$(find "$PWD/stage" -type f -name 'libqca3-qt6.so.*' -print -quit)
+          test -n "$runtime_lib"
+          runtime_libdir=$(dirname "$runtime_lib")
+          elf_depends() {
+            local dir=$1 binary
+            local -a arguments=()
+            while IFS= read -r -d '' binary; do
+              if file "$binary" | grep -q ELF; then arguments+=("-e$binary"); fi
+            done < <(find "$PWD/$dir" -type f -print0)
+            if (( ${#arguments[@]} )); then
+              (cd dependency-scan && dpkg-shlibdeps -O -l"$runtime_libdir" \
+                -L../work/runtime/DEBIAN/shlibs "${arguments[@]}") | sed -n 's/^shlibs:Depends=//p'
+            fi
+          }
           make_deb() {
             dir=$1 pkg=$2 depends=$3 desc=$4
+            automatic=$(elf_depends "$dir")
+            if [[ -n "$automatic" ]]; then depends="${depends:+$depends, }$automatic"; fi
+            test -n "$depends"
             mkdir -p "$dir/DEBIAN"
             cat > "$dir/DEBIAN/control" <<CTRL
           Package: $pkg
@@ -121,10 +146,10 @@ jobs:
           extract_debug_symbols work/utils debug-work/utils
           test -n "$(find debug-work -type f -name '*.debug' -print -quit)"
 
-          make_deb work/runtime libqca3-qt6-3 'libqt6core6t64, libc6, libstdc++6, libgcc-s1' 'QCA3 Qt6 runtime library'
-          make_deb work/plugins libqca3-qt6-plugins 'libqca3-qt6-3, libssl3t64, libsasl2-2' 'QCA3 Qt6 crypto plugins'
-          make_deb work/dev libqca3-qt6-dev 'libqca3-qt6-3, qt6-base-dev' 'QCA3 Qt6 development files'
-          make_deb work/utils qca3-qt6-utils 'libqca3-qt6-3' 'QCA3 Qt6 command line utilities'
+          make_deb work/runtime libqca3-qt6-3 '' 'QCA3 Qt6 runtime library'
+          make_deb work/plugins libqca3-qt6-plugins '' 'QCA3 Qt6 crypto plugins'
+          make_deb work/dev libqca3-qt6-dev "libqca3-qt6-3 (= $version), qt6-base-dev (>= $(dpkg-query -W -f='${Version}' qt6-base-dev))" 'QCA3 Qt6 development files'
+          make_deb work/utils qca3-qt6-utils '' 'QCA3 Qt6 command line utilities'
           make_debug_deb debug-work/runtime libqca3-qt6-3-dbgsym "libqca3-qt6-3 (= $version)" 'QCA3 Qt6 runtime debug symbols'
           make_debug_deb debug-work/plugins libqca3-qt6-plugins-dbgsym "libqca3-qt6-plugins (= $version)" 'QCA3 Qt6 crypto plugins debug symbols'
           make_debug_deb debug-work/utils qca3-qt6-utils-dbgsym "qca3-qt6-utils (= $version)" 'QCA3 Qt6 utilities debug symbols'
@@ -163,6 +188,8 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Set up MSYS2 MINGW64 Qt5
         uses: msys2/setup-msys2@v2
         with:
@@ -262,6 +289,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: ./.github/actions/build-qca-desktop
         with:
           qt-version: ${{ env.QT_VERSION }}
@@ -417,6 +446,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: ./.github/actions/build-qca-android
         id: build-qca
         with:

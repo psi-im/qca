@@ -139,15 +139,16 @@ int BaseOsslTLSContext::maxSSF() const
 
 void BaseOsslTLSContext::setConstraints(int minSSF, int maxSSF)
 {
-    // TODO
-    Q_UNUSED(minSSF);
-    Q_UNUSED(maxSSF);
+    constraintSSF = true;
+    constraintMin = minSSF;
+    constraintMax = maxSSF;
+    constraintSuites.clear();
 }
 
 void BaseOsslTLSContext::setConstraints(const QStringList &cipherSuiteList)
 {
-    // TODO
-    Q_UNUSED(cipherSuiteList);
+    constraintSSF    = false;
+    constraintSuites = cipherSuiteList;
 }
 
 void BaseOsslTLSContext::setup(bool serverMode, const QString &hostName, bool compress)
@@ -826,11 +827,87 @@ bool BaseOsslTLSContext::applyCertificate()
         SSL_check_private_key(ssl) == 1;
 }
 
+bool BaseOsslTLSContext::applyConstraints()
+{
+    if (constraintSSF && (constraintMin < 0 || (constraintMax != -1 && constraintMax < constraintMin)))
+        return false;
+    QByteArray  legacy, modern;
+    QStringList matched;
+    const auto  append = [&](const SSL_CIPHER *cipher) {
+        const char *name  = SSL_CIPHER_get_name(cipher);
+        const bool  tls13 = qstrcmp(SSL_CIPHER_get_version(cipher), "TLSv1.3") == 0;
+        if (tls13 && type() == QLatin1String("dtls"))
+            return;
+        auto &list = tls13 ? modern : legacy;
+        if (!list.isEmpty())
+            list += ':';
+        list += name;
+    };
+    // Restrict OpenSSL's defaults; never lower its configured security level.
+    STACK_OF(SSL_CIPHER) *available = SSL_CTX_get_ciphers(context);
+    if (constraintSSF) {
+        for (int i = 0; i < sk_SSL_CIPHER_num(available); ++i) {
+            const auto *cipher = sk_SSL_CIPHER_value(available, i);
+            const int   bits   = SSL_CIPHER_get_bits(cipher, nullptr);
+            if (bits >= constraintMin && (constraintMax == -1 || bits <= constraintMax))
+                append(cipher);
+        }
+    } else {
+        // Preserve caller preference order and reject unknown names atomically.
+        for (const auto &requested : constraintSuites) {
+            bool found = false;
+            for (int i = 0; i < sk_SSL_CIPHER_num(available); ++i) {
+                const auto *cipher = sk_SSL_CIPHER_value(available, i);
+                if (type() == QLatin1String("dtls") && qstrcmp(SSL_CIPHER_get_version(cipher), "TLSv1.3") == 0)
+                    continue;
+                bool matches = requested == QLatin1String(SSL_CIPHER_get_name(cipher));
+#if OPENSSL_VERSION_NUMBER >= 0x10101000L && !defined(LIBRESSL_VERSION_NUMBER)
+                const char *standard = SSL_CIPHER_standard_name(cipher);
+                matches              = matches || (standard && requested == QLatin1String(standard));
+#endif
+                if (matches) {
+                    if (!matched.contains(requested))
+                        append(cipher);
+                    matched.append(requested);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+                return false;
+        }
+    }
+    if (legacy.isEmpty() && modern.isEmpty())
+        return false;
+    const int legacyResult = SSL_CTX_set_cipher_list(context, legacy.constData());
+    if (!legacy.isEmpty() && legacyResult != 1)
+        return false;
+    if (legacy.isEmpty())
+        ERR_clear_error(); // OpenSSL reports no legacy match; TLS 1.3 may still be allowed.
+#if OPENSSL_VERSION_NUMBER >= 0x10101000L && !defined(LIBRESSL_VERSION_NUMBER)
+    // Empty explicitly disables TLS 1.3 suites, preventing bypass of a legacy-only list.
+    if (SSL_CTX_set_ciphersuites(context, modern.constData()) != 1)
+        return false;
+    if (type() != QLatin1String("dtls")) {
+        if (modern.isEmpty() && SSL_CTX_set_max_proto_version(context, TLS1_2_VERSION) != 1)
+            return false;
+        if (legacy.isEmpty() && SSL_CTX_set_min_proto_version(context, TLS1_3_VERSION) != 1)
+            return false;
+    }
+#endif
+    return true;
+}
+
 bool BaseOsslTLSContext::init()
 {
     context = SSL_CTX_new(method);
     if (!context)
         return false;
+    if (!applyConstraints()) {
+        SSL_CTX_free(context);
+        context = nullptr;
+        return false;
+    }
 
 #if OPENSSL_VERSION_NUMBER >= 0x10101000L && !defined(LIBRESSL_VERSION_NUMBER) && defined(TLSEXT_TYPE_server_name)
     if (serv) {
