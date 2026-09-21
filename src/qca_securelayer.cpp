@@ -1774,8 +1774,9 @@ private Q_SLOTS:
                     emit q->authCheck(c->username(), c->authzid());
                     return;
                 } else if (r == SASLContext::Success) {
-                    if (!disableServerSendLast)
-                        actionQueue += Action(Action::NextStep, c->stepData());
+                    const QByteArray stepData = c->stepData();
+                    if (!disableServerSendLast && !stepData.isNull())
+                        actionQueue += Action(Action::NextStep, stepData);
 
                     actionQueue += Action(Action::Authenticated);
 
@@ -1828,7 +1829,9 @@ private Q_SLOTS:
                         emit q->nextStep(c->stepData());
                         return;
                     } else if (r == SASLContext::Success) {
-                        actionQueue += Action(Action::NextStep, c->stepData());
+                        const QByteArray stepData = c->stepData();
+                        if (!stepData.isNull())
+                            actionQueue += Action(Action::NextStep, stepData);
                         actionQueue += Action(Action::Authenticated);
 
                         processNextAction();
