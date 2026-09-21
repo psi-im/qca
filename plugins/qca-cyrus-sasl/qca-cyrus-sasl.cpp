@@ -79,7 +79,7 @@ public:
         resetNeed();
         resetHave();
         foreach (char *result, results)
-            delete result;
+            delete[] result;
         results.clear();
     }
 
