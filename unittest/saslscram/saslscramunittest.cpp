@@ -61,21 +61,47 @@ void SaslScramUnitTest::scramSha256RoundTrip()
     QSignalSpy serverErrorSpy(&server, &QCA::SASL::error);
     QSignalSpy clientErrorSpy(&client, &QCA::SASL::error);
 
-    QString authenticatedUser;
+    QString     authenticatedUser;
+    QStringList trace;
+    connect(&server, &QCA::SASL::serverStarted, &server, [&] {
+        trace += QStringLiteral("serverStarted:%1").arg(server.mechanismList().join(QLatin1Char(',')));
+    });
     connect(&server, &QCA::SASL::authCheck, &server, [&](const QString &user, const QString &) {
         authenticatedUser = user;
+        trace += QStringLiteral("serverAuthCheck:%1").arg(user);
         server.continueAfterAuthCheck();
     });
     connect(&server, &QCA::SASL::nextStep, &client, [&](const QByteArray &stepData) {
+        trace += QStringLiteral("serverNext:%1:%2")
+                     .arg(stepData.size())
+                     .arg(QString::fromLatin1(stepData.toBase64()));
         client.putStep(stepData);
     });
     connect(&client, &QCA::SASL::nextStep, &server, [&](const QByteArray &stepData) {
+        trace += QStringLiteral("clientNext:%1:%2")
+                     .arg(stepData.size())
+                     .arg(QString::fromLatin1(stepData.toBase64()));
         server.putStep(stepData);
+    });
+    connect(&server, &QCA::SASL::authenticated, &server, [&] {
+        trace += QStringLiteral("serverAuthenticated");
+    });
+    connect(&client, &QCA::SASL::authenticated, &client, [&] {
+        trace += QStringLiteral("clientAuthenticated");
+    });
+    connect(&server, &QCA::SASL::error, &server, [&] {
+        trace += QStringLiteral("serverError:%1:%2").arg(int(server.errorCode())).arg(int(server.authCondition()));
+    });
+    connect(&client, &QCA::SASL::error, &client, [&] {
+        trace += QStringLiteral("clientError:%1:%2").arg(int(client.errorCode())).arg(int(client.authCondition()));
     });
     connect(&client,
             &QCA::SASL::clientStarted,
             &server,
             [&](bool haveClientInit, const QByteArray &clientInitData) {
+                trace += QStringLiteral("clientStarted:%1:%2")
+                             .arg(haveClientInit ? 1 : 0)
+                             .arg(QString::fromLatin1(clientInitData.toBase64()));
                 if (haveClientInit)
                     server.putServerFirstStep(mech, clientInitData);
                 else
@@ -109,8 +135,14 @@ void SaslScramUnitTest::scramSha256RoundTrip()
             .arg(int(server.authCondition()))
             .toUtf8();
 
-    QVERIFY2(clientErrorSpy.isEmpty(), clientError.constData());
-    QVERIFY2(serverErrorSpy.isEmpty(), serverError.constData());
+    const QByteArray traceText = trace.join(QStringLiteral(" | ")).toUtf8();
+    if (!clientErrorSpy.isEmpty())
+        qWarning().noquote() << clientError << traceText;
+    if (!serverErrorSpy.isEmpty())
+        qWarning().noquote() << serverError << traceText;
+
+    QVERIFY2(clientErrorSpy.isEmpty(), traceText.constData());
+    QVERIFY2(serverErrorSpy.isEmpty(), traceText.constData());
     QCOMPARE(clientStartedSpy.size(), 1);
     QCOMPARE(client.mechanism(), mech);
     QCOMPARE(clientAuthSpy.size(), 1);
