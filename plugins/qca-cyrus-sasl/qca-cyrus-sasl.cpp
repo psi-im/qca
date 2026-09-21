@@ -572,11 +572,11 @@ private:
                     result_result = Error;
                     return;
                 }
-                if (r == SASL_OK)
-                    out_buf.resize(0);
-                else
-                    out_buf = makeByteArray(serverout, serveroutlen);
-                last_r = r;
+                // Some mechanisms, notably SCRAM, return their authenticated
+                // server-final data together with SASL_OK.  Preserve it here;
+                // the QCA layer decides whether to emit the final server step.
+                out_buf = makeByteArray(serverout, serveroutlen);
+                last_r  = r;
                 if (ca_flag && !ca_done) {
                     ca_done       = true;
                     ca_skip       = true;
