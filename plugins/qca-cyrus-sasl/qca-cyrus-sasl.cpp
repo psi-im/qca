@@ -273,7 +273,7 @@ private:
         }
         need = nullptr;
         if (callbacks) {
-            delete callbacks;
+            delete[] callbacks;
             callbacks = nullptr;
         }
 
