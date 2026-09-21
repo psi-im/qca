@@ -79,13 +79,303 @@ jobs:
       - uses: actions/checkout@v4
       - run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build qt6-base-dev libssl-dev libsasl2-dev
+          sudo apt-get install -y \
+            cmake ninja-build qt6-base-dev libssl-dev libsasl2-dev \
+            libsasl2-modules libsasl2-modules-db sasl2-bin
+      - name: Configure Ubuntu Cyrus SASL SCRAM fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          db="$RUNNER_TEMP/qca-scram-sasldb2"
+          sudo mkdir -p /etc/sasl2
+          cat <<EOF | sudo tee /etc/sasl2/qca.conf
+          pwcheck_method: auxprop
+          auxprop_plugin: sasldb
+          sasldb_path: $db
+          mech_list: SCRAM-SHA-256
+          EOF
+          printf '%s' 'pencil' | sudo saslpasswd2 -p -c -f "$db" -u example.test qca-scram-user
+          sudo chmod 0644 "$db"
+          sasldblistusers2 -f "$db"
+          dpkg -L libsasl2-modules | grep -E '/libscram\.so(\.|$)'
       - run: |
           cmake -S . -B build -G Ninja \
             -DBUILD_WITH_QT6=ON -DBUILD_PLUGINS='ossl;cyrus-sasl' \
             -DBUILD_TESTS=ON
       - run: cmake --build build
-      - run: ctest --test-dir build --output-on-failure
+      - name: Run Ubuntu 24.04 tests with SCRAM required
+        run: |
+          QCA_SASL_TEST_ENABLE=1 \
+            ctest --test-dir build --output-on-failure
+
+  linux-sasl-asan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build qt6-base-dev libssl-dev libsasl2-dev \
+            libsasl2-modules libsasl2-modules-db sasl2-bin
+      - name: Configure Ubuntu Cyrus SASL SCRAM fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          db="$RUNNER_TEMP/qca-scram-sasldb2"
+          sudo mkdir -p /etc/sasl2
+          cat <<EOF | sudo tee /etc/sasl2/qca.conf
+          pwcheck_method: auxprop
+          auxprop_plugin: sasldb
+          sasldb_path: $db
+          mech_list: SCRAM-SHA-256
+          EOF
+          printf '%s' 'pencil' | sudo saslpasswd2 -p -c -f "$db" -u example.test qca-scram-user
+          sudo chmod 0644 "$db"
+          sasldblistusers2 -f "$db"
+          dpkg -L libsasl2-modules | grep -E '/libscram\.so(\.|$)'
+      - name: Configure QCA with AddressSanitizer
+        run: |
+          cmake -S . -B build-asan -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS='-fsanitize=address -fno-omit-frame-pointer' \
+            -DCMAKE_CXX_FLAGS='-fsanitize=address -fno-omit-frame-pointer' \
+            -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address' \
+            -DCMAKE_SHARED_LINKER_FLAGS='-fsanitize=address' \
+            -DBUILD_WITH_QT6=ON -DBUILD_PLUGINS='ossl;cyrus-sasl' \
+            -DBUILD_TESTS=ON
+      - run: cmake --build build-asan --parallel 2
+      - name: Run Cyrus SASL regressions under AddressSanitizer
+        env:
+          ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
+          QCA_SASL_TEST_ENABLE: '1'
+        run: |
+          ctest --test-dir build-asan \
+            -R '^Sasl(ChannelBinding|Scram)  windows-qt5:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up MSYS2 MINGW64 Qt5
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-qt5-base
+            mingw-w64-x86_64-openssl
+      - name: Verify Windows 7 target baseline
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          macros=$(printf '#include <windows.h>\n' | \
+            gcc -D_WIN32_WINNT=0x0601 -DWINVER=0x0601 -dM -E -x c -)
+          grep -Eq '^#define _WIN32_WINNT 0x0601([[:space:]]|$)' <<< "$macros"
+          grep -Eq '^#define WINVER 0x0601([[:space:]]|$)' <<< "$macros"
+      - name: Configure QCA3 Qt5
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/sdk" \
+            -DCMAKE_C_FLAGS='-D_WIN32_WINNT=0x0601 -DWINVER=0x0601' \
+            -DCMAKE_CXX_FLAGS='-D_WIN32_WINNT=0x0601 -DWINVER=0x0601' \
+            -DBUILD_WITH_QT6=OFF \
+            -DBUILD_SHARED_LIBS=ON \
+            -DBUILD_TESTS=ON \
+            -DBUILD_TOOLS=OFF \
+            -DBUILD_PLUGINS=ossl \
+            -DLOAD_SHARED_PLUGINS=ON \
+            -DQCA_SUFFIX=qt5 \
+            -DUSE_RELATIVE_PATHS=ON
+      - name: Build and test QCA3 Qt5
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+          cmake --install build
+          test -f sdk/lib/cmake/Qca3-qt5/Qca3-qt5Config.cmake
+          test -f sdk/include/Qca3-qt5/QtCrypto/qca_securefile.h
+          test -n "$(find sdk/bin -type f -iname '*qca3-qt5*.dll' -print -quit)"
+          test -n "$(find sdk -type f -iname '*qca-ossl*.dll' -print -quit)"
+      - name: Verify relocated QCA3 Qt5 SDK consumer
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          mv sdk relocated-sdk
+          mkdir consumer
+          cat > consumer/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.16)
+          project(qca_consumer LANGUAGES CXX)
+          find_package(Qca3-qt5 CONFIG REQUIRED)
+          add_executable(qca-consumer main.cpp)
+          target_link_libraries(qca-consumer PRIVATE Qca3::Qca)
+          CMAKE
+          cat > consumer/main.cpp <<'CPP'
+          #include <QtCrypto>
+          int main()
+          {
+              QCA::Initializer init;
+              QCA::SecureFile file(QStringLiteral("unused"));
+              return file.maximumSize() > 0 ? 0 : 1;
+          }
+          CPP
+          cmake -S consumer -B consumer-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            "-DCMAKE_PREFIX_PATH=$PWD/relocated-sdk;/mingw64" \
+            "-DQca3-qt5_DIR=$PWD/relocated-sdk/lib/cmake/Qca3-qt5"
+          cmake --build consumer-build --parallel 2
+          PATH="$PWD/relocated-sdk/bin:/mingw64/bin:$PATH" ./consumer-build/qca-consumer.exe
+          mv relocated-sdk sdk
+      - name: Upload QCA3 Qt5 SDK
+        uses: actions/upload-artifact@v4
+        with:
+          name: qca3-qt5-windows-x64
+          path: sdk/
+          if-no-files-found: error
+          retention-days: 14
+
+  desktop:
+    if: always() && needs.cyrus_ready.result == 'success'
+    needs: cyrus_ready
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-x64
+          - os: macos-15
+            platform: macos-arm64
+          - os: macos-15-intel
+            platform: macos-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-qca-desktop
+        with:
+          qt-version: ${{ env.QT_VERSION }}
+          platform: ${{ matrix.platform }}
+          cyrus-version: ${{ env.CYRUS_VERSION }}
+          cyrus-revision: ${{ env.CYRUS_REVISION }}
+          cyrus-tag: ${{ env.CYRUS_TAG }}
+          install-prefix: ${{ github.workspace }}/sdk
+      - name: Verify required plugins were built
+        shell: bash
+        run: |
+          test -n "$(find build -type f -name '*qca-ossl*' -print -quit)"
+          test -n "$(find build -type f -name '*qca-cyrus-sasl*' -print -quit)"
+      - name: Install and relocate SDK
+        shell: bash
+        run: |
+          cmake --install build --config Release
+          mv sdk relocated-sdk
+      - name: Prepare relocated SDK consumer
+        shell: bash
+        run: |
+          mkdir consumer
+          cat > consumer/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.16)
+          project(qca_consumer LANGUAGES CXX)
+          find_package(Qca3-qt6 CONFIG REQUIRED)
+          add_executable(qca-consumer main.cpp)
+          target_link_libraries(qca-consumer PRIVATE Qca3::Qca)
+          CMAKE
+          cat > consumer/main.cpp <<'CPP'
+          #include <QtCrypto>
+          int main() { QCA::Initializer init; return 0; }
+          CPP
+      - name: Compile and run relocated SDK consumer on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $qcaDir = Join-Path $pwd 'relocated-sdk\lib\cmake\Qca3-qt6'
+          cmake -S consumer -B consumer-build `
+            "-DQca3-qt6_DIR=$qcaDir" `
+            "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build consumer-build --config Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:PATH = "$pwd\relocated-sdk\bin;$env:QT_ROOT_DIR\bin;$env:PATH"
+          & "$pwd\consumer-build\Release\qca-consumer.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Compile and run relocated SDK consumer on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          cmake -S consumer -B consumer-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            "-DQca3-qt6_DIR=$PWD/relocated-sdk/lib/cmake/Qca3-qt6" \
+            "-DCMAKE_PREFIX_PATH=$QT_ROOT_DIR"
+          cmake --build consumer-build
+          DYLD_LIBRARY_PATH="$PWD/relocated-sdk/lib:${DYLD_LIBRARY_PATH:-}" ./consumer-build/qca-consumer
+
+  android:
+    if: always() && needs.cyrus_ready.result == 'success'
+    needs: cyrus_ready
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: arm64-v8a
+            qt_arch: android_arm64_v8a
+          - abi: x86_64
+            qt_arch: android_x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-qca-android
+        with:
+          qt-version: ${{ env.QT_VERSION }}
+          qt-arch: ${{ matrix.qt_arch }}
+          abi: ${{ matrix.abi }}
+          ndk-version: ${{ env.ANDROID_NDK_VERSION }}
+          android-api: ${{ env.ANDROID_API }}
+          cyrus-version: ${{ env.CYRUS_VERSION }}
+          cyrus-revision: ${{ env.CYRUS_REVISION }}
+          cyrus-tag: ${{ env.CYRUS_TAG }}
+          install-prefix: ${{ github.workspace }}/sdk
+      - name: Verify required plugins were built
+        shell: bash
+        run: |
+          test -n "$(find build -type f -name '*qca-ossl*.so' -print -quit)"
+          test -n "$(find build -type f -name '*qca-cyrus-sasl*.so' -print -quit)"
+      - name: Install and relocate SDK
+        shell: bash
+        run: |
+          cmake --install build
+          mv sdk relocated-sdk
+      - name: Compile relocated SDK consumer
+        shell: bash
+        run: |
+          mkdir consumer
+          cat > consumer/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.16)
+          project(qca_consumer LANGUAGES CXX)
+          find_package(Qca3-qt6 CONFIG REQUIRED)
+          add_library(qca-consumer SHARED main.cpp)
+          target_link_libraries(qca-consumer PRIVATE Qca3::Qca)
+          CMAKE
+          cat > consumer/main.cpp <<'CPP'
+          #include <QtCrypto>
+          extern "C" int qca_consumer_smoke()
+          {
+              QCA::Initializer init;
+              return 0;
+          }
+          CPP
+          qt_cmake=$(find "$QT_ROOT_DIR" -type f -name qt-cmake -print -quit)
+          test -n "$qt_cmake"
+          "$qt_cmake" -S consumer -B consumer-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DANDROID_PLATFORM="android-$ANDROID_API" \
+            "-DQca3-qt6_DIR=$PWD/relocated-sdk/lib/cmake/Qca3-qt6"
+          cmake --build consumer-build \
+            --output-on-failure
 
   windows-qt5:
     runs-on: windows-2022
