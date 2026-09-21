@@ -148,9 +148,9 @@ jobs:
         env:
           ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
           QCA_SASL_TEST_ENABLE: '1'
-        run: |
-          ctest --test-dir build-asan \
-            -R '^Sasl(ChannelBinding|Scram)  windows-qt5:
+        run: ctest --test-dir build-asan -R Sasl --output-on-failure
+
+  windows-qt5:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
