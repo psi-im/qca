@@ -436,8 +436,9 @@ private:
         result_haveClientInit = false;
 
         if (step == 0) {
-            const char  *clientout, *m;
-            unsigned int clientoutlen;
+            const char  *clientout = nullptr;
+            const char  *m         = nullptr;
+            unsigned int clientoutlen = 0;
 
             need               = nullptr;
             const QString list = result_mechlist.join(QStringLiteral(" "));
@@ -488,8 +489,8 @@ private:
             result_result = Continue;
             return;
         } else {
-            const char  *clientout;
-            unsigned int clientoutlen;
+            const char  *clientout = nullptr;
+            unsigned int clientoutlen = 0;
             int          r;
             while (true) {
                 if (need)
@@ -533,8 +534,8 @@ private:
                     clientin    = in_clientInit.data();
                     clientinlen = in_clientInit.size();
                 }
-                const char  *serverout;
-                unsigned int serveroutlen;
+                const char  *serverout = nullptr;
+                unsigned int serveroutlen = 0;
                 ca_flag = false;
                 const int r =
                     sasl_server_start(con, in_mech.toLatin1().data(), clientin, clientinlen, &serverout, &serveroutlen);
@@ -564,8 +565,8 @@ private:
             return;
         } else {
             if (!ca_skip) {
-                const char  *serverout;
-                unsigned int serveroutlen;
+                const char  *serverout = nullptr;
+                unsigned int serveroutlen = 0;
                 const int    r = sasl_server_step(con, in_buf.data(), in_buf.size(), &serverout, &serveroutlen);
                 if (r != SASL_OK && r != SASL_CONTINUE) {
                     setAuthCondition(r);
