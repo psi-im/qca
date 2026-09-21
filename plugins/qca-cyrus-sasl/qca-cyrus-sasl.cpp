@@ -197,9 +197,9 @@ public:
 
 static QByteArray makeByteArray(const void *in, unsigned int len)
 {
-    QByteArray buf(len, 0);
-    memcpy(buf.data(), in, len);
-    return buf;
+    if (!in)
+        return QByteArray();
+    return QByteArray(static_cast<const char *>(in), static_cast<int>(len));
 }
 
 static QString addrString(const SASLContext::HostPort &hp)
