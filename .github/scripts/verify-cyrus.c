@@ -37,10 +37,10 @@ static int has_mechanism(const char **mechanisms, const char *expected)
 int main(void)
 {
     static const char *const expected[] = {"PLAIN", "SCRAM-SHA-256", "DIGEST-MD5"};
-    const char              **mechanisms;
-    size_t                    i;
-    int                       failed = 0;
-    int                       rc     = sasl_client_init(callbacks);
+    const char             **mechanisms;
+    size_t                   i;
+    int                      failed = 0;
+    int                      rc     = sasl_client_init(callbacks);
 
     if (rc != SASL_OK) {
         fprintf(stderr, "sasl_client_init failed: %d\n", rc);

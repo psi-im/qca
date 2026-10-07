@@ -1048,6 +1048,9 @@ void BaseOsslTLSContext::getCert()
             }
             MyCertContext *cc = new MyCertContext(provider());
             cc->fromX509(x);
+            // SSL_get_peer_certificate() returns an owned reference. fromX509()
+            // takes its own reference, so release the one returned by OpenSSL.
+            X509_free(x);
             Certificate cert;
             cert.change(cc);
             chain += cert;

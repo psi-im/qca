@@ -51,7 +51,7 @@ void SecureFileUnitTest::roundTrip()
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
 
-    const QString path = directory.filePath(QStringLiteral("secret.bin"));
+    const QString    path = directory.filePath(QStringLiteral("secret.bin"));
     QCA::SecureArray expected(8);
     expected[0] = '\0';
     expected[1] = 's';
@@ -103,7 +103,7 @@ void SecureFileUnitTest::sizeLimit()
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
 
-    const QString path = directory.filePath(QStringLiteral("limited.bin"));
+    const QString   path = directory.filePath(QStringLiteral("limited.bin"));
     QCA::SecureFile file(path);
     file.setMaximumSize(4);
 
@@ -125,7 +125,7 @@ void SecureFileUnitTest::rejectDirectory()
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
 
-    QCA::SecureFile file(directory.path());
+    QCA::SecureFile        file(directory.path());
     const QCA::SecureArray result = file.read();
     QVERIFY(result.isEmpty());
     QCOMPARE(file.error(), QCA::SecureFile::InvalidFile);
@@ -140,7 +140,7 @@ void SecureFileUnitTest::rejectSymlink()
     QVERIFY(directory.isValid());
 
     const QString target = directory.filePath(QStringLiteral("target.bin"));
-    QFile ordinary(target);
+    QFile         ordinary(target);
     QVERIFY(ordinary.open(QIODevice::WriteOnly));
     QCOMPARE(ordinary.write("secret", 6), qint64(6));
     ordinary.close();
@@ -148,7 +148,7 @@ void SecureFileUnitTest::rejectSymlink()
     const QString link = directory.filePath(QStringLiteral("link.bin"));
     QVERIFY(QFile::link(target, link));
 
-    QCA::SecureFile file(link);
+    QCA::SecureFile        file(link);
     const QCA::SecureArray result = file.read();
     QVERIFY(result.isEmpty());
     QCOMPARE(file.error(), QCA::SecureFile::InvalidFile);
@@ -161,7 +161,7 @@ void SecureFileUnitTest::privatePermissions()
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
 
-    const QString path = directory.filePath(QStringLiteral("secret.bin"));
+    const QString   path = directory.filePath(QStringLiteral("secret.bin"));
     QCA::SecureFile file(path);
     QVERIFY(file.write(QCA::SecureArray("secret")));
 

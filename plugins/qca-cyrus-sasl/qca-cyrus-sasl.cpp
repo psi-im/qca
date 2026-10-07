@@ -436,8 +436,8 @@ private:
         result_haveClientInit = false;
 
         if (step == 0) {
-            const char  *clientout = nullptr;
-            const char  *m         = nullptr;
+            const char  *clientout    = nullptr;
+            const char  *m            = nullptr;
             unsigned int clientoutlen = 0;
 
             need               = nullptr;
@@ -489,7 +489,7 @@ private:
             result_result = Continue;
             return;
         } else {
-            const char  *clientout = nullptr;
+            const char  *clientout    = nullptr;
             unsigned int clientoutlen = 0;
             int          r;
             while (true) {
@@ -534,9 +534,9 @@ private:
                     clientin    = in_clientInit.data();
                     clientinlen = in_clientInit.size();
                 }
-                const char  *serverout = nullptr;
+                const char  *serverout    = nullptr;
                 unsigned int serveroutlen = 0;
-                ca_flag = false;
+                ca_flag                   = false;
                 const int r =
                     sasl_server_start(con, in_mech.toLatin1().data(), clientin, clientinlen, &serverout, &serveroutlen);
                 if (r != SASL_OK && r != SASL_CONTINUE) {
@@ -565,7 +565,7 @@ private:
             return;
         } else {
             if (!ca_skip) {
-                const char  *serverout = nullptr;
+                const char  *serverout    = nullptr;
                 unsigned int serveroutlen = 0;
                 const int    r = sasl_server_step(con, in_buf.data(), in_buf.size(), &serverout, &serveroutlen);
                 if (r != SASL_OK && r != SASL_CONTINUE) {

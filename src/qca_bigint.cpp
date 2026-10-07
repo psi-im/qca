@@ -89,14 +89,14 @@ bool modInverse(const BigInteger &value, const BigInteger &modulus, BigInteger *
         product *= newT;
         BigInteger nextT(t);
         nextT -= product;
-        t = newT;
+        t    = newT;
         newT = nextT;
 
         product = quotient;
         product *= newR;
         BigInteger nextR(r);
         nextR -= product;
-        r = newR;
+        r    = newR;
         newR = nextR;
     }
 

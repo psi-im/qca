@@ -33,10 +33,10 @@ namespace QCA {
 class SecureFile::Private
 {
 public:
-    QString fileName;
-    qint64 maximumSize = SecureFile::DefaultMaximumSize;
-    SecureFile::Error error = SecureFile::NoError;
-    QString errorString;
+    QString           fileName;
+    qint64            maximumSize = SecureFile::DefaultMaximumSize;
+    SecureFile::Error error       = SecureFile::NoError;
+    QString           errorString;
 
     void clearError()
     {
@@ -46,7 +46,7 @@ public:
 
     void setError(SecureFile::Error value, const QString &text)
     {
-        error = value;
+        error       = value;
         errorString = text;
     }
 
@@ -129,9 +129,8 @@ SecureArray SecureFile::read()
     }
 
     BY_HANDLE_FILE_INFORMATION info;
-    if (!GetFileInformationByHandle(handle, &info) || GetFileType(handle) != FILE_TYPE_DISK
-        || (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-        || (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+    if (!GetFileInformationByHandle(handle, &info) || GetFileType(handle) != FILE_TYPE_DISK ||
+        (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
         CloseHandle(handle);
         d->setError(InvalidFile, QStringLiteral("Secure file is not a regular file"));
         return SecureArray();
@@ -144,16 +143,16 @@ SecureArray SecureFile::read()
         return SecureArray();
     }
 
-    const qint64 limit = d->effectiveMaximumSize();
-    qint64 used = 0;
-    int capacity = static_cast<int>(std::min<qint64>(size.QuadPart, limit));
-    SecureArray result(capacity);
+    const qint64 limit    = d->effectiveMaximumSize();
+    qint64       used     = 0;
+    int          capacity = static_cast<int>(std::min<qint64>(size.QuadPart, limit));
+    SecureArray  result(capacity);
 
     for (;;) {
         if (used == capacity) {
             if (used == limit) {
                 SecureArray probe(1);
-                DWORD count = 0;
+                DWORD       count = 0;
                 if (!ReadFile(handle, probe.data(), 1, &count, nullptr)) {
                     CloseHandle(handle);
                     d->setError(ReadError, QStringLiteral("Unable to read secure file"));
@@ -176,7 +175,7 @@ SecureArray SecureFile::read()
             capacity = static_cast<int>(next);
         }
 
-        DWORD count = 0;
+        DWORD       count  = 0;
         const DWORD wanted = static_cast<DWORD>(capacity - used);
         if (!ReadFile(handle, result.data() + used, wanted, &count, nullptr)) {
             CloseHandle(handle);
@@ -212,18 +211,18 @@ bool SecureFile::write(const SecureArray &data)
     }
 
     const QFileInfo targetInfo(d->fileName);
-    const QDir directory(targetInfo.absolutePath());
+    const QDir      directory(targetInfo.absolutePath());
     if (!directory.exists()) {
         d->setError(InvalidPath, QStringLiteral("Secure file directory does not exist"));
         return false;
     }
 
     QString temporaryName;
-    HANDLE temporary = INVALID_HANDLE_VALUE;
+    HANDLE  temporary = INVALID_HANDLE_VALUE;
     for (int attempt = 0; attempt < 64; ++attempt) {
         const QString suffix = QUuid::createUuid().toString(QUuid::Id128);
-        temporaryName = directory.filePath(QStringLiteral(".%1.qca-%2.tmp").arg(targetInfo.fileName(), suffix));
-        temporary = CreateFileW(reinterpret_cast<LPCWSTR>(temporaryName.utf16()),
+        temporaryName        = directory.filePath(QStringLiteral(".%1.qca-%2.tmp").arg(targetInfo.fileName(), suffix));
+        temporary            = CreateFileW(reinterpret_cast<LPCWSTR>(temporaryName.utf16()),
                                 GENERIC_WRITE,
                                 0,
                                 nullptr,
@@ -244,7 +243,7 @@ bool SecureFile::write(const SecureArray &data)
     qint64 written = 0;
     while (written < data.size()) {
         const DWORD chunk = static_cast<DWORD>(std::min<qint64>(data.size() - written, 1024 * 1024));
-        DWORD count = 0;
+        DWORD       count = 0;
         if (!WriteFile(temporary, data.constData() + written, chunk, &count, nullptr) || count == 0) {
             CloseHandle(temporary);
             DeleteFileW(reinterpret_cast<LPCWSTR>(temporaryName.utf16()));
@@ -319,7 +318,7 @@ SecureArray SecureFile::read()
     }
 
     const QByteArray encodedName = QFile::encodeName(d->fileName);
-    int flags = O_RDONLY;
+    int              flags       = O_RDONLY;
 #ifdef O_CLOEXEC
     flags |= O_CLOEXEC;
 #endif
@@ -358,8 +357,8 @@ SecureArray SecureFile::read()
     }
 #ifndef O_NOFOLLOW
     struct stat pathInfoAfter;
-    if (lstat(encodedName.constData(), &pathInfoAfter) != 0 || S_ISLNK(pathInfoAfter.st_mode)
-        || pathInfoAfter.st_dev != info.st_dev || pathInfoAfter.st_ino != info.st_ino) {
+    if (lstat(encodedName.constData(), &pathInfoAfter) != 0 || S_ISLNK(pathInfoAfter.st_mode) ||
+        pathInfoAfter.st_dev != info.st_dev || pathInfoAfter.st_ino != info.st_ino) {
         closeReadFile(fd);
         d->setError(InvalidFile, QStringLiteral("Secure file changed while it was opened"));
         return SecureArray();
@@ -373,15 +372,15 @@ SecureArray SecureFile::read()
         return SecureArray();
     }
 
-    qint64 used = 0;
-    int capacity = static_cast<int>(std::min<qint64>(info.st_size, limit));
+    qint64      used     = 0;
+    int         capacity = static_cast<int>(std::min<qint64>(info.st_size, limit));
     SecureArray result(capacity);
 
     for (;;) {
         if (used == capacity) {
             if (used == limit) {
                 SecureArray probe(1);
-                ssize_t count;
+                ssize_t     count;
                 do {
                     count = ::read(fd, probe.data(), 1);
                 } while (count < 0 && errno == EINTR);
@@ -440,7 +439,7 @@ bool SecureFile::write(const SecureArray &data)
     }
 
     const QByteArray encodedTarget = QFile::encodeName(d->fileName);
-    struct stat targetInfo;
+    struct stat      targetInfo;
     if (lstat(encodedTarget.constData(), &targetInfo) == 0) {
         if (S_ISLNK(targetInfo.st_mode) || !S_ISREG(targetInfo.st_mode)) {
             d->setError(InvalidFile, QStringLiteral("Secure file target is not a regular file"));
@@ -452,15 +451,15 @@ bool SecureFile::write(const SecureArray &data)
     }
 
     const QFileInfo fileInfo(d->fileName);
-    const QDir directory(fileInfo.absolutePath());
+    const QDir      directory(fileInfo.absolutePath());
     if (!directory.exists()) {
         d->setError(InvalidPath, QStringLiteral("Secure file directory does not exist"));
         return false;
     }
 
-    QString temporaryPattern = directory.filePath(QStringLiteral(".%1.qca-XXXXXX").arg(fileInfo.fileName()));
+    QString    temporaryPattern = directory.filePath(QStringLiteral(".%1.qca-XXXXXX").arg(fileInfo.fileName()));
     QByteArray encodedTemporary = QFile::encodeName(temporaryPattern);
-    int fd = mkstemp(encodedTemporary.data());
+    int        fd               = mkstemp(encodedTemporary.data());
     if (fd < 0) {
         d->setError(OpenError, QStringLiteral("Unable to create secure temporary file"));
         return false;
@@ -510,7 +509,7 @@ bool SecureFile::write(const SecureArray &data)
 
 #ifdef O_DIRECTORY
     const QByteArray encodedDirectory = QFile::encodeName(directory.absolutePath());
-    int directoryFlags = O_RDONLY | O_DIRECTORY;
+    int              directoryFlags   = O_RDONLY | O_DIRECTORY;
 #ifdef O_CLOEXEC
     directoryFlags |= O_CLOEXEC;
 #endif

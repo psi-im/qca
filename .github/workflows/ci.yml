@@ -150,6 +150,12 @@ jobs:
           QCA_SASL_TEST_ENABLE: '1'
         run: ctest --test-dir build-asan -R Sasl --output-on-failure
 
+      - name: Run OpenSSL ownership regression under LeakSanitizer
+        env:
+          ASAN_OPTIONS: 'detect_leaks=1:abort_on_error=1'
+        run: |
+          build-asan/bin/dtlssrtpunittest repeatedCertificateAndHandshakeLifetime
+
   windows-qt5:
     runs-on: windows-2022
     steps:
