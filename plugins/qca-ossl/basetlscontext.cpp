@@ -1048,6 +1048,7 @@ void BaseOsslTLSContext::getCert()
             }
             MyCertContext *cc = new MyCertContext(provider());
             cc->fromX509(x);
+            X509_free(x);
             Certificate cert;
             cert.change(cc);
             chain += cert;
