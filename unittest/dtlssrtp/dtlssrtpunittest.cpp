@@ -68,7 +68,8 @@ public:
     DTLSSRTPPair(const QCA::Certificate &certificate,
                  const QCA::PrivateKey  &privateKey,
                  const QString          &provider,
-                 QCA::TLS::Mode          mode = QCA::TLS::Datagram)
+                 QCA::TLS::Mode          mode = QCA::TLS::Datagram,
+                 bool                    mutualCertificate = false)
         : m_client(mode, this, provider)
         , m_server(mode, this, provider)
     {
@@ -79,6 +80,10 @@ public:
         QCA::CertificateChain chain;
         chain.append(certificate);
         m_server.setCertificate(chain, privateKey);
+        if (mutualCertificate) {
+            m_server.setTrustedCertificates(trusted);
+            m_client.setCertificate(chain, privateKey);
+        }
 
         connect(&m_client, &QCA::TLS::readyReadOutgoing, this, [this]() { transfer(m_client, m_server); });
         connect(&m_server, &QCA::TLS::readyReadOutgoing, this, [this]() { transfer(m_server, m_client); });
@@ -214,6 +219,7 @@ private Q_SLOTS:
     void cleanupTestCase();
     void apiValidation();
     void cipherConstraints();
+    void repeatedCertificateAndHandshakeLifetime();
     void negotiateAndExport_data();
     void negotiateAndExport();
 
@@ -279,6 +285,39 @@ void DTLSSRTPUnitTest::cipherConstraints()
     modern.setCiphers({tls13}, {tls13});
     QVERIFY2(modern.run(), qPrintable(modern.errorString()));
     QCOMPARE(modern.clientCipher(), tls13);
+}
+
+void DTLSSRTPUnitTest::repeatedCertificateAndHandshakeLifetime()
+{
+    const QString provider = QStringLiteral("qca-ossl");
+    if (!QCA::isSupported("dtls", provider) || !QCA::isSupported("cert", provider)
+        || !QCA::isSupported("pkey", provider))
+        QSKIP("qca-ossl DTLS/certificate provider is not available");
+
+    QCA::ConvertResult keyResult = QCA::ErrorDecode;
+    const QCA::PrivateKey key = QCA::PrivateKey::fromPEMFile(
+        QStringLiteral("dtlssrtp-certs/default.key"), QCA::SecureArray(), &keyResult, provider);
+    QCOMPARE(keyResult, QCA::ConvertGood);
+    QVERIFY(!key.isNull());
+
+    const auto now = QDateTime::currentDateTimeUtc();
+    for (int iteration = 0; iteration < 10; ++iteration) {
+        QCA::CertificateOptions options;
+        QCA::CertificateInfo info;
+        info.insert(QCA::CommonName, QStringLiteral("qca-dtls-lifetime"));
+        options.setInfo(info);
+        options.setSerialNumber(QCA::BigInteger(iteration + 1));
+        options.setValidityPeriod(now, now.addDays(1));
+        options.setConstraints(
+            QCA::Constraints {QCA::DigitalSignature, QCA::KeyEncipherment, QCA::ClientAuth, QCA::ServerAuth});
+        options.setAsCA();
+
+        const QCA::Certificate certificate(options, key, provider);
+        QVERIFY(!certificate.isNull());
+
+        DTLSSRTPPair pair(certificate, key, provider, QCA::TLS::Datagram, true);
+        QVERIFY2(pair.run(), qPrintable(pair.errorString()));
+    }
 }
 
 void DTLSSRTPUnitTest::apiValidation()
