@@ -1948,6 +1948,7 @@ CertContext *MyCAContext::signRequest(const CSRContext &req, const QDateTime &no
 
     X509_set_pubkey(x, static_cast<const MyPKeyContext *>(req.subjectPublicKey())->get_pkey());
     X509_set_subject_name(x, subjectName);
+    X509_NAME_free(subjectName);
     X509_set_issuer_name(x, X509_get_subject_name(caCert.cert));
 
     // subject key id
@@ -2112,6 +2113,7 @@ bool MyCSRContext::createRequest(const CertificateOptions &opts, const PKeyConte
     // subject
     X509_NAME *name = new_cert_name(info);
     X509_REQ_set_subject_name(x, name);
+    X509_NAME_free(name);
 
     // challenge
     const QByteArray cs = opts.challenge().toLatin1();
