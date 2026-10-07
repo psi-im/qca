@@ -19,7 +19,7 @@ jobs:
     permissions:
       contents: write
 
-  debian:
+  ubuntu:
     strategy:
       fail-fast: false
       matrix:
@@ -33,156 +33,30 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y binutils cmake file ninja-build qt6-base-dev libssl-dev libsasl2-dev dpkg-dev
-      - name: Build and install
-        run: |
-          cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=/usr \
-            -DBUILD_WITH_QT6=ON -DBUILD_TESTS=OFF -DBUILD_TOOLS=ON \
-            -DBUILD_PLUGINS='ossl;cyrus-sasl'
-          cmake --build build
-          DESTDIR="$PWD/stage" cmake --install build
-          test -n "$(find stage -type f -name '*qca-ossl*.so*' -print -quit)"
-          test -n "$(find stage -type f -name '*qca-cyrus-sasl*.so*' -print -quit)"
-      - name: Build split deb packages
+      - name: Build, package and smoke-test QCA
+        uses: ./.github/actions/build-qca-deb
+        with:
+          artifact: ${{ matrix.artifact }}
+
+  debian:
+    name: Debian 13 (amd64)
+    runs-on: ubuntu-24.04
+    container: debian:13-slim
+    steps:
+      - name: Bootstrap Debian build tools
         shell: bash
         run: |
           set -euo pipefail
-          version=$(cat build/qca-version.txt)
-          arch=$(dpkg --print-architecture)
-          mkdir -p debs debug-debs work/{runtime,dev,plugins,utils} debug-work/{runtime,plugins,utils}
-          while IFS= read -r -d '' f; do
-            rel=${f#stage/}
-            case "$rel" in
-              */qca3-qt6/crypto/*) dst=plugins ;;
-              usr/include/*|*/cmake/*|*/pkgconfig/*|*.so) dst=dev ;;
-              usr/bin/*|usr/share/man/*) dst=utils ;;
-              *) dst=runtime ;;
-            esac
-            mkdir -p "work/$dst/$(dirname "$rel")"
-            cp -a "$f" "work/$dst/$rel"
-          done < <(find stage \( -type f -o -type l \) -print0)
-          # Let dpkg derive versioned dependencies from symbols, including Qt's
-          # qt_version_tag. The private shlibs entry resolves our staged runtime.
-          mkdir -p dependency-scan/debian work/runtime/DEBIAN
-          printf 'Source: qca3\nMaintainer: Psi IM developers\n\nPackage: qca3-scan\nArchitecture: any\nDescription: dependency scan\n' > dependency-scan/debian/control
-          printf 'libqca3-qt6 3 libqca3-qt6-3 (= %s)\n' "$version" > work/runtime/DEBIAN/shlibs
-          printf 'activate-noawait ldconfig\n' > work/runtime/DEBIAN/triggers
-          runtime_lib=$(find "$PWD/stage" -type f -name 'libqca3-qt6.so.*' -print -quit)
-          test -n "$runtime_lib"
-          runtime_libdir=$(dirname "$runtime_lib")
-          elf_depends() {
-            local dir=$1 binary
-            local -a arguments=()
-            while IFS= read -r -d '' binary; do
-              if file "$binary" | grep -q ELF; then arguments+=("-e$binary"); fi
-            done < <(find "$PWD/$dir" -type f -print0)
-            if (( ${#arguments[@]} )); then
-              (cd dependency-scan && dpkg-shlibdeps -O -l"$runtime_libdir" \
-                -L../work/runtime/DEBIAN/shlibs "${arguments[@]}") | sed -n 's/^shlibs:Depends=//p'
-            fi
-          }
-          make_deb() {
-            dir=$1 pkg=$2 depends=$3 desc=$4
-            automatic=$(elf_depends "$dir")
-            if [[ -n "$automatic" ]]; then depends="${depends:+$depends, }$automatic"; fi
-            test -n "$depends"
-            mkdir -p "$dir/DEBIAN"
-            cat > "$dir/DEBIAN/control" <<CTRL
-          Package: $pkg
-          Version: $version
-          Architecture: $arch
-          Maintainer: Psi IM developers
-          Depends: $depends
-          Section: libs
-          Priority: optional
-          Description: $desc
-          CTRL
-            dpkg-deb --build --root-owner-group "$dir" "debs/${pkg}_${version}_${arch}.deb"
-          }
-          make_debug_deb() {
-            dir=$1 pkg=$2 depends=$3 desc=$4
-            mkdir -p "$dir/DEBIAN"
-            cat > "$dir/DEBIAN/control" <<CTRL
-          Package: $pkg
-          Version: $version
-          Architecture: $arch
-          Maintainer: Psi IM developers
-          Depends: $depends
-          Section: debug
-          Priority: optional
-          Description: $desc
-          CTRL
-            dpkg-deb --build --root-owner-group "$dir" "debug-debs/${pkg}_${version}_${arch}.deb"
-          }
-          extract_debug_symbols() {
-            dir=$1 debug_dir=$2
-            while IFS= read -r -d '' binary; do
-              if ! file "$binary" | grep -q 'ELF'; then
-                continue
-              fi
-              build_id=$(readelf -n "$binary" | awk '/Build ID:/ {print $3}')
-              if [[ -z "$build_id" ]]; then
-                echo "ELF binary has no build ID: $binary" >&2
-                exit 1
-              fi
-              debug="$debug_dir/usr/lib/debug/.build-id/${build_id:0:2}/${build_id:2}.debug"
-              mkdir -p "$(dirname "$debug")"
-              objcopy --only-keep-debug "$binary" "$debug"
-              strip --strip-unneeded "$binary"
-              test -s "$debug"
-              if readelf -S "$binary" | grep -q '\.debug_'; then
-                echo "Debug sections remain after stripping: $binary" >&2
-                exit 1
-              fi
-            done < <(find "$dir" -type f -print0)
-          }
-
-          extract_debug_symbols work/runtime debug-work/runtime
-          extract_debug_symbols work/plugins debug-work/plugins
-          extract_debug_symbols work/utils debug-work/utils
-          test -n "$(find debug-work -type f -name '*.debug' -print -quit)"
-
-          make_deb work/runtime libqca3-qt6-3 '' 'QCA3 Qt6 runtime library'
-          make_deb work/plugins libqca3-qt6-plugins '' 'QCA3 Qt6 crypto plugins'
-          make_deb work/dev libqca3-qt6-dev "libqca3-qt6-3 (= $version), qt6-base-dev (>= $(dpkg-query -W -f='${Version}' qt6-base-dev))" 'QCA3 Qt6 development files'
-          make_deb work/utils qca3-qt6-utils '' 'QCA3 Qt6 command line utilities'
-          make_debug_deb debug-work/runtime libqca3-qt6-3-dbgsym "libqca3-qt6-3 (= $version)" 'QCA3 Qt6 runtime debug symbols'
-          make_debug_deb debug-work/plugins libqca3-qt6-plugins-dbgsym "libqca3-qt6-plugins (= $version)" 'QCA3 Qt6 crypto plugins debug symbols'
-          make_debug_deb debug-work/utils qca3-qt6-utils-dbgsym "qca3-qt6-utils (= $version)" 'QCA3 Qt6 utilities debug symbols'
-          ls -l debs debug-debs
-      - name: Install package smoke test
-        run: sudo apt-get install -y ./debs/*.deb
-      - name: Compile installed CMake consumer
-        shell: bash
-        run: |
-          mkdir consumer
-          cat > consumer/CMakeLists.txt <<'CMAKE'
-          cmake_minimum_required(VERSION 3.16)
-          project(qca_consumer LANGUAGES CXX)
-          find_package(Qca3-qt6 CONFIG REQUIRED)
-          add_executable(qca-consumer main.cpp)
-          target_link_libraries(qca-consumer PRIVATE Qca3::Qca)
-          CMAKE
-          cat > consumer/main.cpp <<'CPP'
-          #include <QtCrypto>
-          int main() { QCA::Initializer init; return 0; }
-          CPP
-          cmake -S consumer -B consumer-build -G Ninja
-          cmake --build consumer-build
-          ./consumer-build/qca-consumer
-      - uses: actions/upload-artifact@v4
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get -o Acquire::http::Timeout=30 -o Acquire::Retries=2 -o APT::Update::Error-Mode=any update
+          apt-get install -y --no-install-recommends ca-certificates git sudo build-essential gh
+      - uses: actions/checkout@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: debs/*.deb
-      - uses: actions/upload-artifact@v4
+          fetch-depth: 0
+      - name: Build, package and smoke-test QCA
+        uses: ./.github/actions/build-qca-deb
         with:
-          name: ${{ matrix.artifact }}-symbols
-          path: debug-debs/*.deb
-          if-no-files-found: error
+          artifact: qca3-deb-debian-13
 
   windows-qt5-sdk:
     runs-on: windows-2022
