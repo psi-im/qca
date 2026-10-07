@@ -1143,6 +1143,8 @@ bool MyCertContext::createSelfSigned(const CertificateOptions &opts, const PKeyC
 
     // issuer == subject
     X509_set_issuer_name(x, name);
+    // X509_set_subject_name() and X509_set_issuer_name() copy the name.
+    X509_NAME_free(name);
 
     // subject key id
     ex = new_subject_key_id(x);
