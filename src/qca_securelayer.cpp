@@ -799,7 +799,10 @@ public:
                     io_pending  = true;
                 }
 
-                if (!packet_out.isEmpty())
+                // Incoming datagrams can accumulate while a provider update
+                // or a readiness action is pending. Drain them without waiting
+                // for another network packet to trigger an update.
+                if (!packet_out.isEmpty() || !packet_from_net.isEmpty())
                     io_pending = true;
             }
 

@@ -85,12 +85,29 @@ public:
             m_client.setCertificate(chain, privateKey);
         }
 
-        connect(&m_client, &QCA::TLS::readyReadOutgoing, this, [this]() { transfer(m_client, m_server); });
+        connect(&m_client, &QCA::TLS::readyReadOutgoing, this, [this]() {
+            if (!m_pauseClientDelivery)
+                transfer(m_client, m_server);
+        });
         connect(&m_server, &QCA::TLS::readyReadOutgoing, this, [this]() { transfer(m_server, m_client); });
         connect(&m_client, &QCA::TLS::handshaken, this, [this]() { handshaken(m_client, true); });
         connect(&m_server, &QCA::TLS::handshaken, this, [this]() { handshaken(m_server, false); });
         connect(&m_client, &QCA::TLS::error, this, [this]() { failed(QStringLiteral("client"), m_client); });
         connect(&m_server, &QCA::TLS::error, this, [this]() { failed(QStringLiteral("server"), m_server); });
+    }
+
+    void pauseClientDelivery()
+    {
+        m_pauseClientDelivery = true;
+    }
+
+    QCA::TLS &client()
+    {
+        return m_client;
+    }
+    QCA::TLS &server()
+    {
+        return m_server;
     }
 
     void setCiphers(const QStringList &client, const QStringList &server)
@@ -198,9 +215,10 @@ private:
 
     QCA::TLS                     m_client;
     QCA::TLS                     m_server;
-    QEventLoop                  *m_loop             = nullptr;
-    bool                         m_clientHandshaken = false;
-    bool                         m_serverHandshaken = false;
+    QEventLoop                  *m_loop                = nullptr;
+    bool                         m_pauseClientDelivery = false;
+    bool                         m_clientHandshaken    = false;
+    bool                         m_serverHandshaken    = false;
     QString                      m_errorString;
     QString                      m_clientProfile;
     QString                      m_serverProfile;
@@ -219,6 +237,7 @@ private Q_SLOTS:
     void cleanupTestCase();
     void apiValidation();
     void cipherConstraints();
+    void incomingDatagramBurst();
     void repeatedCertificateAndHandshakeLifetime();
     void negotiateAndExport_data();
     void negotiateAndExport();
@@ -318,6 +337,41 @@ void DTLSSRTPUnitTest::repeatedCertificateAndHandshakeLifetime()
         DTLSSRTPPair pair(certificate, key, provider, QCA::TLS::Datagram, true);
         QVERIFY2(pair.run(), qPrintable(pair.errorString()));
     }
+}
+
+void DTLSSRTPUnitTest::incomingDatagramBurst()
+{
+    const QString provider = QStringLiteral("qca-ossl");
+    if (!QCA::isSupported("dtls", provider))
+        QSKIP("qca-ossl DTLS provider is not available");
+    const auto cert = QCA::Certificate::fromPEMFile(QStringLiteral("dtlssrtp-certs/default.crt"));
+    const auto key  = QCA::PrivateKey::fromPEMFile(QStringLiteral("dtlssrtp-certs/default.key"));
+    QVERIFY(!cert.isNull() && !key.isNull());
+    DTLSSRTPPair pair(cert, key, provider);
+    QVERIFY2(pair.run(), qPrintable(pair.errorString()));
+    pair.pauseClientDelivery();
+
+    QList<QByteArray> expected, received;
+    connect(&pair.server(), &QCA::TLS::readyRead, this, [&]() {
+        while (pair.server().packetsAvailable())
+            received.append(pair.server().read());
+    });
+    for (int i = 0; i < 32; ++i) {
+        expected.append(QByteArray(1024, char(i)));
+        pair.client().write(expected.constLast());
+    }
+    QTRY_COMPARE(pair.client().packetsOutgoingAvailable(), expected.size());
+
+    // A UDP readyRead handler can submit several packets before the provider
+    // finishes its asynchronous update. No later packet should be required
+    // to release the tail of this burst.
+    QList<QByteArray> encrypted;
+    while (pair.client().packetsOutgoingAvailable())
+        encrypted.append(pair.client().readOutgoing());
+    for (const auto &packet : encrypted)
+        pair.server().writeIncoming(packet);
+    QTRY_COMPARE_WITH_TIMEOUT(received.size(), expected.size(), 2000);
+    QCOMPARE(received, expected);
 }
 
 void DTLSSRTPUnitTest::apiValidation()
