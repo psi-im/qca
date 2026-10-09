@@ -4,6 +4,9 @@ inputs:
   artifact:
     description: Package artifact name for this distribution
     required: true
+  source-ref:
+    description: Source ref whose release version must match the packages
+    required: false
 runs:
   using: composite
   steps:
@@ -14,11 +17,20 @@ runs:
       sudo apt-get install -y binutils cmake file ninja-build qt6-base-dev libssl-dev libsasl2-dev dpkg-dev
     shell: bash
   - name: Build and install
+    env:
+      PACKAGE_SOURCE_REF: ${{ inputs.source-ref }}
     run: |
+      set -euo pipefail
       cmake -S . -B build -G Ninja \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=/usr \
         -DBUILD_WITH_QT6=ON -DBUILD_TESTS=OFF -DBUILD_TOOLS=ON \
         -DBUILD_PLUGINS='ossl;cyrus-sasl'
+      version=$(cat build/qca-version.txt)
+      source_ref=${PACKAGE_SOURCE_REF:-${GITHUB_REF_NAME:-}}
+      if [[ "$source_ref" == v3* && "$version" != "${source_ref#v}" ]]; then
+        echo "::error::QCA version $version does not match release tag $source_ref"
+        exit 1
+      fi
       cmake --build build --parallel 4
       DESTDIR="$PWD/stage" cmake --install build
       test -n "$(find stage -type f -name '*qca-ossl*.so*' -print -quit)"

@@ -2,6 +2,16 @@ name: QCA3 packages
 
 on:
   workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Git ref to package; defaults to the selected workflow ref
+        required: false
+        type: string
+      debian_only:
+        description: Build only Debian packages
+        required: false
+        default: false
+        type: boolean
   push:
     tags: [ 'v3*' ]
 
@@ -15,11 +25,13 @@ env:
 
 jobs:
   ensure_cyrus_bundles:
+    if: ${{ !inputs.debian_only }}
     uses: ./.github/workflows/deps-cyrus-sasl.yml
     permissions:
       contents: write
 
   ubuntu:
+    if: ${{ !inputs.debian_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -32,6 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.source_ref || github.sha }}
           fetch-depth: 0
       - name: Build, package and smoke-test QCA
         uses: ./.github/actions/build-qca-deb
@@ -52,17 +65,32 @@ jobs:
           apt-get install -y --no-install-recommends ca-certificates git sudo build-essential gh
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.source_ref || github.sha }}
           fetch-depth: 0
+      - name: Trust container checkout for Git version detection
+        shell: bash
+        run: |
+          # checkout sets safe.directory in a temporary HOME. Subsequent
+          # container steps need the exception in their own Git configuration.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Checkout packaging workflow helpers
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: packaging-workflow
       - name: Build, package and smoke-test QCA
-        uses: ./.github/actions/build-qca-deb
+        uses: ./packaging-workflow/.github/actions/build-qca-deb
         with:
           artifact: qca3-deb-debian-13
+          source-ref: ${{ inputs.source_ref || github.ref_name }}
 
   windows-qt5-sdk:
+    if: ${{ !inputs.debian_only }}
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.source_ref || github.sha }}
           fetch-depth: 0
       - name: Set up MSYS2 MINGW64 Qt5
         uses: msys2/setup-msys2@v2
@@ -149,6 +177,7 @@ jobs:
           if-no-files-found: error
 
   desktop-sdk:
+    if: ${{ !inputs.debian_only }}
     needs: ensure_cyrus_bundles
     strategy:
       fail-fast: false
@@ -164,6 +193,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.source_ref || github.sha }}
           fetch-depth: 0
       - uses: ./.github/actions/build-qca-desktop
         with:
@@ -306,6 +336,7 @@ jobs:
           if-no-files-found: error
 
   android-sdk:
+    if: ${{ !inputs.debian_only }}
     needs: ensure_cyrus_bundles
     strategy:
       fail-fast: false
@@ -321,6 +352,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.source_ref || github.sha }}
           fetch-depth: 0
       - uses: ./.github/actions/build-qca-android
         id: build-qca
