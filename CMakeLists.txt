@@ -9,22 +9,9 @@ endif()
 # The cmake min. version should be set before calling project(...) too
 cmake_minimum_required(VERSION 3.16)
 
-# A release archive without Git retains an explicit fallback version.
-set(QCA_VERSION_FALLBACK "3.0.6")
-set(QCA_VERSION "${QCA_VERSION_FALLBACK}")
-find_package(Git QUIET)
-if(GIT_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
-  execute_process(COMMAND "${GIT_EXECUTABLE}" describe --tags --abbrev=0 --match "v[0-9]*"
-    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-    OUTPUT_VARIABLE _qca_tag OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET
-    RESULT_VARIABLE _qca_tag_result)
-  if(_qca_tag_result EQUAL 0 AND _qca_tag MATCHES "^v([0-9]+)\\.([0-9]+)\\.([0-9]+)$")
-    set(QCA_VERSION "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.${CMAKE_MATCH_3}")
-  else()
-    message(WARNING "No usable QCA release tag; using ${QCA_VERSION_FALLBACK}")
-  endif()
-endif()
-project(qca VERSION ${QCA_VERSION})
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/QcaVersion.cmake")
+
+project(qca VERSION "${qca_version}")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/qca-version.txt" "${PROJECT_VERSION}\n")
 message(STATUS "QCA version: ${PROJECT_VERSION}")
 
