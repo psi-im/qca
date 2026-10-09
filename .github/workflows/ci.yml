@@ -77,6 +77,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -112,6 +114,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -160,6 +164,8 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Set up MSYS2 MINGW64 Qt5
         uses: msys2/setup-msys2@v2
         with:
@@ -262,6 +268,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: ./.github/actions/build-qca-desktop
         with:
           qt-version: ${{ env.QT_VERSION }}
@@ -334,6 +342,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: ./.github/actions/build-qca-android
         with:
           qt-version: ${{ env.QT_VERSION }}
