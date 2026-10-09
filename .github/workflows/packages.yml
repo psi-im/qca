@@ -54,7 +54,8 @@ jobs:
   debian:
     name: Debian 13 (amd64)
     runs-on: ubuntu-24.04
-    container: debian:13-slim
+    # Use Google's Docker Hub cache to avoid anonymous pull limits on runners.
+    container: mirror.gcr.io/library/debian:13-slim
     steps:
       - name: Bootstrap Debian build tools
         shell: bash
