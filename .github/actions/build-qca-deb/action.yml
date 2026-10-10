@@ -58,11 +58,13 @@ runs:
       # qt_version_tag. The private shlibs entry resolves our staged runtime.
       mkdir -p dependency-scan/debian work/runtime/DEBIAN
       printf 'Source: qca3\nMaintainer: Psi IM developers\n\nPackage: qca3-scan\nArchitecture: any\nDescription: dependency scan\n' > dependency-scan/debian/control
-      # The library keeps the same SONAME and ABI since v3.0.10. Do not
-      # accidentally turn the version of this particular build into a strict
-      # runtime dependency for every consuming Debian package.
-      # Update the floor only when QCA actually starts requiring a newer ABI.
-      abi_floor=3.0.10
+      # libqca3-qt6.so.3 is the compatible 3.x ABI line, not a strict
+      # build-version dependency. The shlibs entry sets only the baseline for
+      # consumers of this SONAME. Consumers requiring bug fixes or symbols
+      # introduced after v3.0.0 must specify their own higher minimum (or
+      # use Debian symbols metadata for per-symbol minimum versions).
+      # Do not raise this floor just because QCA ships another patch release.
+      abi_floor=3.0.0
       if ! dpkg --compare-versions "$version" ge "$abi_floor"; then
         echo "::error::QCA $version predates declared ABI floor $abi_floor" >&2
         exit 1
