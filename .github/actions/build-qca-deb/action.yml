@@ -58,7 +58,17 @@ runs:
       # qt_version_tag. The private shlibs entry resolves our staged runtime.
       mkdir -p dependency-scan/debian work/runtime/DEBIAN
       printf 'Source: qca3\nMaintainer: Psi IM developers\n\nPackage: qca3-scan\nArchitecture: any\nDescription: dependency scan\n' > dependency-scan/debian/control
-      printf 'libqca3-qt6 3 libqca3-qt6-3 (= %s)\n' "$version" > work/runtime/DEBIAN/shlibs
+      # The library keeps the same SONAME and ABI since v3.0.10. Do not
+      # accidentally turn the version of this particular build into a strict
+      # runtime dependency for every consuming Debian package.
+      # Update the floor only when QCA actually starts requiring a newer ABI.
+      abi_floor=3.0.10
+      if ! dpkg --compare-versions "$version" ge "$abi_floor"; then
+        echo "::error::QCA $version predates declared ABI floor $abi_floor" >&2
+        exit 1
+      fi
+      printf 'libqca3-qt6 3 libqca3-qt6-3 (>= %s)\n' "$abi_floor" > work/runtime/DEBIAN/shlibs
+      grep -Fx "libqca3-qt6 3 libqca3-qt6-3 (>= $abi_floor)" work/runtime/DEBIAN/shlibs
       printf 'activate-noawait ldconfig\n' > work/runtime/DEBIAN/triggers
       runtime_lib=$(find "$PWD/stage" -type f -name 'libqca3-qt6.so.*' -print -quit)
       test -n "$runtime_lib"
@@ -135,6 +145,16 @@ runs:
       extract_debug_symbols work/utils debug-work/utils
       test -n "$(find debug-work -type f -name '*.debug' -print -quit)"
 
+      # Assert the dependency scanner emits a floor, never '=' to the
+      # currently built patch version. This is consumed by AnyKeep/Iris.
+      scan_depends=$(elf_depends work/plugins)
+      if [[ -n "$scan_depends" && "$scan_depends" == *"libqca3-qt6-3"* ]]; then
+        grep -Fx "libqca3-qt6 3 libqca3-qt6-3 (>= $abi_floor)" work/runtime/DEBIAN/shlibs
+        if [[ "$scan_depends" != *"libqca3-qt6-3 (>= $abi_floor)"* ]]; then
+          echo "::error::QCA runtime scan did not honor ABI floor: $scan_depends" >&2
+          exit 1
+        fi
+      fi
       make_deb work/runtime libqca3-qt6-3 '' 'QCA3 Qt6 runtime library'
       make_deb work/plugins libqca3-qt6-plugins '' 'QCA3 Qt6 crypto plugins'
       make_deb work/dev libqca3-qt6-dev "libqca3-qt6-3 (= $version), qt6-base-dev (>= $(dpkg-query -W -f='${Version}' qt6-base-dev))" 'QCA3 Qt6 development files'
