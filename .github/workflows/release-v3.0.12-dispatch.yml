@@ -1,0 +1,52 @@
+name: Dispatch QCA v3.0.12 release
+# One-shot release initiator. The actual artifact validation and publication
+# remain exclusively in .github/workflows/release.yml.
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/release-v3.0.12-dispatch.yml'
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Tag the exact, validated PR #24 merge
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          expected=96c88f9ee127d206691ff688e68676c022f505f8
+          git cat-file -e "$expected^{commit}"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/pulls/24" --jq .merge_commit_sha)" = "$expected"
+          git merge-base --is-ancestor "$expected" HEAD
+          git fetch --force --tags origin
+          if git rev-parse -q --verify 'refs/tags/v3.0.12' >/dev/null; then
+            test "$(git rev-list -n1 v3.0.12)" = "$expected" || {
+              echo "::error::Existing v3.0.12 points to a different commit"
+              exit 1
+            }
+          else
+            git config user.name github-actions
+            git config user.email github-actions@users.noreply.github.com
+            git tag -a v3.0.12 "$expected" -m "QCA 3.0.12 (Qt 6.12 Windows/macOS/Android SDKs)"
+            git push origin refs/tags/v3.0.12
+          fi
+      - name: Start the existing QCA release workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Workflow dispatch is allowed to trigger other workflows even when
+          # issued with GITHUB_TOKEN; git-tag push itself is not.
+          gh workflow run release.yml --ref master --repo "$GITHUB_REPOSITORY" -f tag=v3.0.12
+          echo 'Triggered QCA release workflow for v3.0.12.'
