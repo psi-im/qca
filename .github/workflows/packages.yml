@@ -326,6 +326,9 @@ jobs:
       - name: Restore SDK artifact path
         shell: bash
         run: mv relocated-sdk sdk
+      - name: Stamp exact Qt6 SDK version
+        shell: bash
+        run: printf '%s\n' "$QT_VERSION" > sdk/QT-SDK-VERSION.txt
       - uses: actions/upload-artifact@v4
         with:
           name: qca3-qt6-${{ matrix.platform }}
@@ -438,6 +441,9 @@ jobs:
             "-DQca3-qt6_DIR=$PWD/relocated-sdk/lib/cmake/Qca3-qt6"
           cmake --build consumer-build
           mv relocated-sdk sdk
+      - name: Stamp exact Android Qt6 SDK version
+        shell: bash
+        run: printf '%s\n' "$QT_VERSION" > sdk/QT-SDK-VERSION.txt
       - uses: actions/upload-artifact@v4
         with:
           name: qca3-qt6-android-${{ matrix.abi }}
