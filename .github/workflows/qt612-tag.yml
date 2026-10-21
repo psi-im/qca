@@ -1,0 +1,62 @@
+name: Finalize Qt6.12 QCA SDK tag
+on:
+  push:
+    branches: [release/qt-6.12-unification]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  tag-after-ci:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Wait for all QCA regressions to succeed
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          head="$GITHUB_SHA"
+          for i in $(seq 1 360); do
+            payload=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?per_page=50&head_sha=$head")
+            state=$(jq -r --arg sha "$head" '
+              [.workflow_runs[] | select(.head_sha == $sha and .event == "pull_request")]
+              | sort_by(.created_at) | last | [.status, (.conclusion // "")] | @tsv
+            ' <<< "$payload")
+            if [[ "$state" == $'completed\tsuccess' ]]; then
+              echo "QCA regression CI passed for $head"
+              break
+            fi
+            if [[ "$state" == completed$'\t'* && "$state" != $'completed\tsuccess' ]]; then
+              echo "::error::QCA regression CI not successful: $state"
+              exit 1
+            fi
+            if (( i == 360 )); then
+              echo "::error::Timed out waiting for QCA regression CI ($state)"
+              exit 1
+            fi
+            sleep 15
+          done
+      - name: Create release tag from exactly verified branch commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=v3.0.12
+          git fetch origin release/qt-6.12-unification --no-tags
+          test "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA" || {
+            echo "::error::Branch advanced since CI validation"; exit 1;
+          }
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            echo "::error::Tag $tag already exists; never move tags"
+            exit 1
+          fi
+          git config user.name github-actions
+          git config user.email github-actions@users.noreply.github.com
+          git tag -a "$tag" "$GITHUB_SHA" -m 'QCA 3.0.12: Qt 6.12.0 SDKs for desktop and Android'
+          git push origin "refs/tags/$tag"
+          echo "Tagged verified QCA $tag at $GITHUB_SHA"
