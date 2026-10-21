@@ -32,6 +32,9 @@ runs:
       uses: jurplel/install-qt-action@v4
       with:
         version: ${{ inputs.qt-version }}
+        # aqtinstall 3.3.0 assumes the pre-6.11 Windows repository layout.
+        # Pinned upstream merge of miurahr/aqtinstall#1000 supports Qt 6.12.
+        aqtsource: ${{ runner.os == 'Windows' && 'git+https://github.com/miurahr/aqtinstall.git@8c3695d4a4e1ceabf6a74dc6c79681656dc6b74b' || '' }}
         cache: true
 
     - name: Download static Cyrus SASL bundle
