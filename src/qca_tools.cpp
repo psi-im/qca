@@ -337,7 +337,9 @@ static char blank[] = "";
 class MemoryRegion::Private : public QSharedData
 {
 public:
-    alloc_info ai;
+    // Initialize all pointers and the size before ai_new() fills them.
+    // Failed/empty allocations must remain safe for memcpy and destruction.
+    alloc_info ai {};
 
     Private(int size, bool sec)
     {
@@ -372,7 +374,7 @@ public:
         if (ai.sec == sec)
             return;
 
-        alloc_info other;
+        alloc_info other {};
         ai_new(&other, ai.size, sec);
         memcpy(other.data, ai.data, ai.size);
         ai_delete(&ai);
