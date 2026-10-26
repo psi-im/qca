@@ -7,7 +7,6 @@ on:
   workflow_dispatch:
 
 env:
-  QT_VERSION: 6.12.0
   CYRUS_VERSION: 2.1.28
   CYRUS_REVISION: r5
   CYRUS_TAG: deps-cyrus-sasl-2.1.28-r5
@@ -270,9 +269,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Load locked Qt6 SDK version
+        id: dependency_lock
+        uses: ./.github/actions/load-dependency-lock
       - uses: ./.github/actions/build-qca-desktop
         with:
-          qt-version: ${{ env.QT_VERSION }}
+          qt-version: ${{ steps.dependency_lock.outputs.qt_version }}
           platform: ${{ matrix.platform }}
           cyrus-version: ${{ env.CYRUS_VERSION }}
           cyrus-revision: ${{ env.CYRUS_REVISION }}
@@ -344,9 +346,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Load locked Qt6 SDK version
+        id: dependency_lock
+        uses: ./.github/actions/load-dependency-lock
       - uses: ./.github/actions/build-qca-android
         with:
-          qt-version: ${{ env.QT_VERSION }}
+          qt-version: ${{ steps.dependency_lock.outputs.qt_version }}
           qt-arch: ${{ matrix.qt_arch }}
           abi: ${{ matrix.abi }}
           ndk-version: ${{ env.ANDROID_NDK_VERSION }}
