@@ -2,9 +2,9 @@ name: Read QCA dependency lock
 description: Read and validate the pinned Qt6 SDK version from the checked-out source
 
 outputs:
-  qt-version:
+  qt_version:
     description: Exact Qt6 SDK version selected by dependencies.lock.json
-    value: ${{ steps.lock.outputs.qt-version }}
+    value: ${{ steps.lock.outputs.qt_version }}
 
 runs:
   using: composite
@@ -22,9 +22,9 @@ runs:
         lock = json.loads(Path("dependencies.lock.json").read_text(encoding="utf-8"))
         qt = lock.get("qt", {})
         version = qt.get("version") if isinstance(qt, dict) else None
-        if not isinstance(version, str) or not re.fullmatch(r"6\\.[0-9]+\\.[0-9]+", version):
+        if not isinstance(version, str) or not re.fullmatch(r"6\.[0-9]+\.[0-9]+", version):
             raise SystemExit("dependencies.lock.json: qt.version must be a Qt6 patch version (6.x.y)")
         print(version)
         PY
         )"
-        echo "qt-version=$qt_version" >> "$GITHUB_OUTPUT"
+        echo "qt_version=$qt_version" >> "$GITHUB_OUTPUT"
