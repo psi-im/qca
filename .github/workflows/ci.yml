@@ -14,6 +14,17 @@ env:
   ANDROID_API: 28
 
 jobs:
+  dependency_lock:
+    name: Qt6 dependency lock
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - id: qt
+        uses: ./.github/actions/load-dependency-lock
+      - name: Verify locked Qt version
+        shell: bash
+        run: test -n "${{ steps.qt.outputs.qt_version }}"
+
   ensure_cyrus_bundles:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/deps-cyrus-sasl.yml
