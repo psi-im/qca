@@ -336,7 +336,8 @@ public:
     {
         RSA, ///< RSA key
         DSA, ///< DSA key
-        DH   ///< Diffie Hellman key
+        DH,  ///< Diffie Hellman key
+        Ed25519 ///< Ed25519 signing key (RFC 8032)
     };
 
     /**
@@ -457,6 +458,9 @@ else
        Test if the key is a Diffie Hellman key
     */
     bool isDH() const;
+
+    /** Test if this key is an Ed25519 signing or verification key. */
+    bool isEd25519() const;
 
     /**
        Test if the key is a public key
