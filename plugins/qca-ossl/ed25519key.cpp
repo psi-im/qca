@@ -1,11 +1,13 @@
 #include "ed25519key.h"
 
+#include <QTimer>
+
 #ifdef EVP_PKEY_ED25519
 
 namespace opensslQCAPlugin {
 
 Ed25519Key::Ed25519Key(QCA::Provider *provider, EVP_PKEY *key, bool isPrivate)
-    : PKeyBase(provider, QStringLiteral("ed25519"))
+    : Ed25519Context(provider)
     , _key(key)
     , _private(isPrivate)
 {
@@ -66,6 +68,34 @@ void Ed25519Key::convertToPublic()
 int Ed25519Key::bits() const
 {
     return _key ? EVP_PKEY_bits(_key) : 0;
+}
+
+void Ed25519Key::createPrivate(bool block)
+{
+    if (!block) {
+        // Ed25519 generation is fast; defer to the event loop to match
+        // KeyGenerator's asynchronous finished() contract.
+        QTimer::singleShot(0, this, [this] {
+            createPrivate(true);
+            emit finished();
+        });
+        return;
+    }
+
+    EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, nullptr);
+    EVP_PKEY *generated = nullptr;
+    if (!ctx || EVP_PKEY_keygen_init(ctx) != 1
+        || EVP_PKEY_keygen(ctx, &generated) != 1) {
+        EVP_PKEY_free(generated);
+        generated = nullptr;
+    }
+    EVP_PKEY_CTX_free(ctx);
+
+    EVP_PKEY_free(_key);
+    _key = generated;
+    _private = (_key != nullptr);
+    _message.clear();
+    _operation = Operation::Idle;
 }
 
 void Ed25519Key::startSign(QCA::SignatureAlgorithm alg, QCA::SignatureFormat)
