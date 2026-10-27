@@ -653,6 +653,24 @@ Q_SIGNALS:
 };
 
 /**
+   Provider interface for generating Ed25519 key pairs.
+
+   Implemented by providers which advertise the "ed25519" feature.
+   As with RSAContext, asynchronous generation emits finished().
+*/
+class QCA_EXPORT Ed25519Context : public PKeyBase
+{
+    Q_OBJECT
+public:
+    Ed25519Context(Provider *provider)
+        : PKeyBase(provider, QStringLiteral("ed25519"))
+    {
+    }
+
+    virtual void createPrivate(bool block) = 0;
+};
+
+/**
    \class RSAContext qcaprovider.h QtCrypto
 
    RSA provider

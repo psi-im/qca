@@ -24,6 +24,7 @@
 
 #include "dhkey.h"
 #include "dsakey.h"
+#include "ed25519key.h"
 #include "rsakey.h"
 #include "utils.h"
 
@@ -125,6 +126,9 @@ QList<PKey::Type> MyPKeyContext::supportedTypes() const
     list += PKey::RSA;
     list += PKey::DSA;
     list += PKey::DH;
+#ifdef EVP_PKEY_ED25519
+    list += PKey::Ed25519;
+#endif
     return list;
 }
 
@@ -133,6 +137,9 @@ QList<PKey::Type> MyPKeyContext::supportedIOTypes() const
     QList<PKey::Type> list;
     list += PKey::RSA;
     list += PKey::DSA;
+#ifdef EVP_PKEY_ED25519
+    list += PKey::Ed25519;
+#endif
     return list;
 }
 
@@ -172,6 +179,10 @@ EVP_PKEY *MyPKeyContext::get_pkey() const
         return static_cast<RSAKey *>(k)->evp.pkey;
     else if (t == PKey::DSA)
         return static_cast<DSAKey *>(k)->evp.pkey;
+#ifdef EVP_PKEY_ED25519
+    else if (t == PKey::Ed25519)
+        return static_cast<Ed25519Key *>(k)->pkey();
+#endif
     else
         return static_cast<DHKey *>(k)->evp.pkey;
 }
@@ -195,6 +206,10 @@ PKeyBase *MyPKeyContext::pkeyToBase(EVP_PKEY *pkey, bool sec) const
         c->evp.pkey = pkey;
         c->sec      = sec;
         nk          = c;
+#ifdef EVP_PKEY_ED25519
+    } else if (pkey_type == EVP_PKEY_ED25519) {
+        nk = new Ed25519Key(provider(), pkey, sec);
+#endif
     } else {
         EVP_PKEY_free(pkey);
     }

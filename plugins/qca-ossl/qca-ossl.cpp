@@ -23,6 +23,7 @@
 #include "certcontext.h"
 #include "dhkey.h"
 #include "dsakey.h"
+#include "ed25519key.h"
 #include "dtlscontext.h"
 #include "pkeycontext.h"
 #include "rsakey.h"
@@ -2301,6 +2302,9 @@ public:
         list += QStringLiteral("hkdf(sha256)");
 #endif // LIBRESSL_VERSION_NUMBER
         list += QStringLiteral("pkey");
+#ifdef EVP_PKEY_ED25519
+        list += QStringLiteral("ed25519");
+#endif
         list += QStringLiteral("dlgroup");
         list += QStringLiteral("rsa");
         list += QStringLiteral("dsa");
@@ -2470,6 +2474,10 @@ public:
             return new RSAKey(this);
         else if (type == QLatin1String("dsa"))
             return new DSAKey(this);
+#ifdef EVP_PKEY_ED25519
+        else if (type == QLatin1String("ed25519"))
+            return new Ed25519Key(this, nullptr, false);
+#endif
         else if (type == QLatin1String("dh"))
             return new DHKey(this);
         else if (type == QLatin1String("cert"))

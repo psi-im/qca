@@ -336,7 +336,8 @@ public:
     {
         RSA, ///< RSA key
         DSA, ///< DSA key
-        DH   ///< Diffie Hellman key
+        DH,  ///< Diffie Hellman key
+        Ed25519 ///< Ed25519 signing key (RFC 8032)
     };
 
     /**
@@ -457,6 +458,9 @@ else
        Test if the key is a Diffie Hellman key
     */
     bool isDH() const;
+
+    /** Test if this key is an Ed25519 signing or verification key. */
+    bool isEd25519() const;
 
     /**
        Test if the key is a public key
@@ -1270,6 +1274,15 @@ public:
        provider is required
     */
     PrivateKey createRSA(int bits, int exp = 65537, const QString &provider = QString());
+
+    /**
+       Generate an Ed25519 signing key pair (RFC 8032).
+
+       The private key can be exported as PKCS#8 DER/PEM and the public key
+       as SubjectPublicKeyInfo DER/PEM. Nonblocking operation emits finished().
+       Returns a null key if the provider has no Ed25519 support.
+    */
+    PrivateKey createEd25519(const QString &provider = QString());
 
     /**
        Generate a DSA key

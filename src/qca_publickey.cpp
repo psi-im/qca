@@ -661,6 +661,11 @@ bool PKey::isDH() const
     return (type() == DH);
 }
 
+bool PKey::isEd25519() const
+{
+    return !isNull() && type() == Ed25519;
+}
+
 bool PKey::isPublic() const
 {
     if (isNull())
@@ -829,7 +834,7 @@ bool PublicKey::canDecrypt() const
 
 bool PublicKey::canVerify() const
 {
-    return (isRSA() || isDSA());
+    return (isRSA() || isDSA() || isEd25519());
 }
 
 int PublicKey::maximumEncryptSize(EncryptionAlgorithm alg) const
@@ -1017,7 +1022,7 @@ bool PrivateKey::canEncrypt() const
 
 bool PrivateKey::canSign() const
 {
-    return (isRSA() || isDSA());
+    return (isRSA() || isDSA() || isEd25519());
 }
 
 int PrivateKey::maximumEncryptSize(EncryptionAlgorithm alg) const
@@ -1258,6 +1263,37 @@ PrivateKey KeyGenerator::createRSA(int bits, int exp, const QString &provider)
         static_cast<RSAContext *>(d->k)->createPrivate(bits, exp, false);
     } else {
         static_cast<RSAContext *>(d->k)->createPrivate(bits, exp, true);
+        d->done();
+    }
+
+    return d->key;
+}
+
+PrivateKey KeyGenerator::createEd25519(const QString &provider)
+{
+    if (isBusy())
+        return PrivateKey();
+
+    d->key = PrivateKey();
+    d->wasBlocking = d->blocking;
+    d->k = static_cast<Ed25519Context *>(getContext(QStringLiteral("ed25519"), provider));
+    if (!d->k)
+        return PrivateKey();
+
+    d->dest = static_cast<PKeyContext *>(getContext(QStringLiteral("pkey"), d->k->provider()));
+    if (!d->dest) {
+        delete d->k;
+        d->k = nullptr;
+        return PrivateKey();
+    }
+
+    if (!d->blocking) {
+        d->k->moveToThread(thread());
+        d->k->setParent(d);
+        connect(d->k, &Ed25519Context::finished, d, &Private::done);
+        static_cast<Ed25519Context *>(d->k)->createPrivate(false);
+    } else {
+        static_cast<Ed25519Context *>(d->k)->createPrivate(true);
         d->done();
     }
 
