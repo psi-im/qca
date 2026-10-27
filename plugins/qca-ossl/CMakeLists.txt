@@ -60,6 +60,8 @@ if(TARGET OpenSSL::SSL AND TARGET OpenSSL::Crypto)
       keyutils.h
       rsakey.cpp
       rsakey.h
+      ed25519key.cpp
+      ed25519key.h
       dsakey.cpp
       dsakey.h
       dhkey.cpp
