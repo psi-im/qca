@@ -1276,6 +1276,15 @@ public:
     PrivateKey createRSA(int bits, int exp = 65537, const QString &provider = QString());
 
     /**
+       Generate an Ed25519 signing key pair (RFC 8032).
+
+       The private key can be exported as PKCS#8 DER/PEM and the public key
+       as SubjectPublicKeyInfo DER/PEM. Nonblocking operation emits finished().
+       Returns a null key if the provider has no Ed25519 support.
+    */
+    PrivateKey createEd25519(const QString &provider = QString());
+
+    /**
        Generate a DSA key
 
        This method creates both the public key and corresponding private
