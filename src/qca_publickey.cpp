@@ -1269,6 +1269,37 @@ PrivateKey KeyGenerator::createRSA(int bits, int exp, const QString &provider)
     return d->key;
 }
 
+PrivateKey KeyGenerator::createEd25519(const QString &provider)
+{
+    if (isBusy())
+        return PrivateKey();
+
+    d->key = PrivateKey();
+    d->wasBlocking = d->blocking;
+    d->k = static_cast<Ed25519Context *>(getContext(QStringLiteral("ed25519"), provider));
+    if (!d->k)
+        return PrivateKey();
+
+    d->dest = static_cast<PKeyContext *>(getContext(QStringLiteral("pkey"), d->k->provider()));
+    if (!d->dest) {
+        delete d->k;
+        d->k = nullptr;
+        return PrivateKey();
+    }
+
+    if (!d->blocking) {
+        d->k->moveToThread(thread());
+        d->k->setParent(d);
+        connect(d->k, &Ed25519Context::finished, d, &Private::done);
+        static_cast<Ed25519Context *>(d->k)->createPrivate(false);
+    } else {
+        static_cast<Ed25519Context *>(d->k)->createPrivate(true);
+        d->done();
+    }
+
+    return d->key;
+}
+
 PrivateKey KeyGenerator::createDSA(const DLGroup &domain, const QString &provider)
 {
     if (isBusy())
