@@ -13,6 +13,7 @@ private Q_SLOTS:
     void rfc8032Vector();
     void wrongSchemeAndTampering();
     void pemAndDerRoundtrip();
+    void generatesEd25519();
 private:
     QCA::Initializer _qca;
     static QCA::SignatureAlgorithm algorithm()
@@ -110,6 +111,20 @@ void Ed25519UnitTest::pemAndDerRoundtrip()
     const QByteArray sig = pemSecret.signMessage(msg, algorithm());
     QVERIFY(pemPublic.verifyMessage(msg, sig, algorithm()));
     QVERIFY(derPublic.verifyMessage(msg, sig, algorithm()));
+}
+
+void Ed25519UnitTest::generatesEd25519()
+{
+    QCA::KeyGenerator generator;
+    QCA::PrivateKey key = generator.createEd25519(QStringLiteral("qca-ossl"));
+    QVERIFY(!key.isNull());
+    QVERIFY(key.isEd25519());
+    QCA::PublicKey pub = key.toPublicKey();
+    QVERIFY(!pub.isNull());
+    const QByteArray data("generated key test");
+    QByteArray sig = key.signMessage(data, algorithm());
+    QCOMPARE(sig.size(), 64);
+    QVERIFY(pub.verifyMessage(data, sig, algorithm()));
 }
 
 QTEST_APPLESS_MAIN(Ed25519UnitTest)
