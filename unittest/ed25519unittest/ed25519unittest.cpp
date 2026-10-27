@@ -73,7 +73,7 @@ void Ed25519UnitTest::wrongSchemeAndTampering()
     QByteArray signature = secret.signMessage(payload, algorithm());
     QCOMPARE(signature.size(), 64);
     QVERIFY(publicPart.verifyMessage(payload, signature, algorithm()));
-    QVERIFY(!publicPart.verifyMessage(payload + "tampered", signature, algorithm()));
+    QVERIFY(!publicPart.verifyMessage(QByteArray(payload).append("tampered"), signature, algorithm()));
     signature[0] = static_cast<char>(signature[0] ^ 1);
     QVERIFY(!publicPart.verifyMessage(payload, signature, algorithm()));
     const QCA::SignatureAlgorithm wrongScheme {
@@ -95,11 +95,11 @@ void Ed25519UnitTest::pemAndDerRoundtrip()
     QVERIFY(!secret.isNull());
     QVERIFY(!publicPart.isNull());
     QCA::ConvertResult result = QCA::ConvertGood;
-    const QCA::PrivateKey pemSecret = QCA::PrivateKey::fromPEM(secret.toPEM(), {}, &result);
+    QCA::PrivateKey pemSecret = QCA::PrivateKey::fromPEM(secret.toPEM(), {}, &result);
     QCOMPARE(result, QCA::ConvertGood);
     QVERIFY(!pemSecret.isNull());
     QVERIFY(pemSecret.isEd25519());
-    const QCA::PublicKey pemPublic = QCA::PublicKey::fromPEM(publicPart.toPEM(), &result);
+    QCA::PublicKey pemPublic = QCA::PublicKey::fromPEM(publicPart.toPEM(), &result);
     QCOMPARE(result, QCA::ConvertGood);
     QVERIFY(!pemPublic.isNull());
     QVERIFY(pemPublic.isEd25519());
