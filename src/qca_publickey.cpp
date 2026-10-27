@@ -661,6 +661,11 @@ bool PKey::isDH() const
     return (type() == DH);
 }
 
+bool PKey::isEd25519() const
+{
+    return !isNull() && type() == Ed25519;
+}
+
 bool PKey::isPublic() const
 {
     if (isNull())
@@ -829,7 +834,7 @@ bool PublicKey::canDecrypt() const
 
 bool PublicKey::canVerify() const
 {
-    return (isRSA() || isDSA());
+    return (isRSA() || isDSA() || isEd25519());
 }
 
 int PublicKey::maximumEncryptSize(EncryptionAlgorithm alg) const
@@ -1017,7 +1022,7 @@ bool PrivateKey::canEncrypt() const
 
 bool PrivateKey::canSign() const
 {
-    return (isRSA() || isDSA());
+    return (isRSA() || isDSA() || isEd25519());
 }
 
 int PrivateKey::maximumEncryptSize(EncryptionAlgorithm alg) const
