@@ -11,7 +11,7 @@
 namespace opensslQCAPlugin {
 
 #ifdef EVP_PKEY_ED25519
-class Ed25519Key final : public QCA::PKeyBase
+class Ed25519Key final : public QCA::Ed25519Context
 {
 public:
     // Takes ownership of the supplied EVP_PKEY.
@@ -25,6 +25,7 @@ public:
     bool canExport() const override;
     void convertToPublic() override;
     int bits() const override;
+    void createPrivate(bool block) override;
 
     void startSign(QCA::SignatureAlgorithm alg, QCA::SignatureFormat format) override;
     void startVerify(QCA::SignatureAlgorithm alg, QCA::SignatureFormat format) override;
