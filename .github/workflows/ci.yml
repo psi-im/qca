@@ -220,6 +220,22 @@ jobs:
           set -euo pipefail
           cmake --build build --parallel 2
           ctest --test-dir build --output-on-failure
+          # The tests run every algorithm on every loaded provider, where
+          # qca-ossl covers everything. Run them again with qca-wincrypto
+          # alone, before the install puts plugins on QCA's default path.
+          mkdir -p wincrypto-only/crypto
+          cp "$(find build/lib -type f -iname '*qca-wincrypto*.dll' -print -quit)" wincrypto-only/crypto/
+          export QCA_PLUGIN_PATH="$(cygpath -m "$PWD/wincrypto-only")"
+          for test in hashunittest kdfunittest cipherunittest; do
+            out="$(cd build/bin && "./$test.exe" 2>&1)" || { echo "$out"; exit 1; }
+            grep -E '^Totals' <<< "$out"
+            grep -q '"qca-wincrypto"' <<< "$out" || { echo "$out"; echo "$test: qca-wincrypto not loaded"; exit 1; }
+            if grep -q '"qca-ossl"' <<< "$out"; then echo "$test: qca-ossl loaded"; exit 1; fi
+            if grep -E 'NONE of the providers supports (MD5|SHA1|SHA256|SHA384|SHA512|PBKDF version 2|HKDF|AES)' <<< "$out"; then
+              exit 1
+            fi
+          done
+          unset QCA_PLUGIN_PATH
           cmake --install build
           test -f sdk/lib/cmake/Qca3-qt5/Qca3-qt5Config.cmake
           test -f sdk/include/Qca3-qt5/QtCrypto/qca_securefile.h
