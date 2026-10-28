@@ -219,6 +219,9 @@ jobs:
         run: |
           set -euo pipefail
           trap 'echo "::error::Line $LINENO failed: $BASH_COMMAND"' ERR
+          # Without a console window, Qt on Windows sends test output to
+          # OutputDebugString instead of stdout.
+          export QT_FORCE_STDERR_LOGGING=1
           cmake --build build --parallel 2
           ctest --test-dir build --output-on-failure
           # The tests run every algorithm on every loaded provider, where
