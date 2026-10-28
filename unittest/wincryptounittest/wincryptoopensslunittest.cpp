@@ -324,7 +324,7 @@ void WinCryptoOpenSSLTest::interoperability_data()
                                     QStringLiteral("SRTP_AES128_CM_HMAC_SHA1_32"),
                                     QStringLiteral("SRTP_AEAD_AES_128_GCM"),
                                     QStringLiteral("SRTP_AEAD_AES_256_GCM")}) {
-            const auto name =
+            const QByteArray name =
                 (server ? QByteArray("native-server:") : QByteArray("native-client:")) + profile.toLatin1();
             QTest::newRow(name.constData()) << server << profile;
         }

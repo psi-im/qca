@@ -228,8 +228,8 @@ void WinCryptoDTLSTest::datagrams()
     QList<QByteArray> records;
     while (pair.client.packetsOutgoingAvailable())
         records.append(pair.client.readOutgoing());
-    auto corrupted = records.front();
-    corrupted[corrupted.size() - 1] ^= 1;
+    auto corrupted                  = records.front();
+    corrupted[corrupted.size() - 1] = char(corrupted.at(corrupted.size() - 1) ^ 1);
     pair.server.writeIncoming(corrupted);
     // A forged, unencrypted close_notify must not close an established session.
     pair.server.writeIncoming(QByteArray::fromHex("15fefd000000000000000000020100"));
