@@ -57,7 +57,7 @@ runs:
       # Let dpkg derive versioned dependencies from symbols, including Qt's
       # qt_version_tag. The private shlibs entry resolves our staged runtime.
       mkdir -p dependency-scan/debian work/runtime/DEBIAN
-      printf 'Source: qca3\nMaintainer: Psi IM developers\n\nPackage: qca3-scan\nArchitecture: any\nDescription: dependency scan\n' > dependency-scan/debian/control
+      printf 'Source: qca3\nMaintainer: QCA maintainers\n\nPackage: qca3-scan\nArchitecture: any\nDescription: dependency scan\n' > dependency-scan/debian/control
       # libqca3-qt6.so.3 is the compatible 3.x ABI line, not a strict
       # build-version dependency. The shlibs entry sets only the baseline for
       # consumers of this SONAME. Consumers requiring bug fixes or symbols
@@ -96,7 +96,7 @@ runs:
       Package: $pkg
       Version: $version
       Architecture: $arch
-      Maintainer: Psi IM developers
+      Maintainer: QCA maintainers
       Depends: $depends
       Section: libs
       Priority: optional
@@ -111,7 +111,7 @@ runs:
       Package: $pkg
       Version: $version
       Architecture: $arch
-      Maintainer: Psi IM developers
+      Maintainer: QCA maintainers
       Depends: $depends
       Section: debug
       Priority: optional
@@ -148,7 +148,7 @@ runs:
       test -n "$(find debug-work -type f -name '*.debug' -print -quit)"
 
       # Assert the dependency scanner emits a floor, never '=' to the
-      # currently built patch version. This is consumed by AnyKeep/Iris.
+      # currently built patch version, so compatible consumers can use it.
       scan_depends=$(elf_depends work/plugins)
       if [[ -n "$scan_depends" && "$scan_depends" == *"libqca3-qt6-3"* ]]; then
         grep -Fx "libqca3-qt6 3 libqca3-qt6-3 (>= $abi_floor)" work/runtime/DEBIAN/shlibs

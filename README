@@ -5,14 +5,10 @@ Qt Cryptographic Architecture (QCA)
 This is a fork
 --------------
 
-  This is a fork of https://invent.kde.org/libraries/qca.
-Unfortunately it's not possible to keep development under the hood of KDE project since
-KDE developers are very conservative and do not accept new applications to the KDE developers.
-Approximately the same can be said about any new feature brought into the project. Previously
-QCA was developed by Justin Karneges, same developer who invented Psi IM where QCA was heavily
-used. At some moment the QCA maintenance has been moved to KDE and it's mostly inactive there.
-Currently Psi IM needs a set of features from QCA and to quicken the implementation this fork
-was born.
+  This repository maintains a general-purpose Qt cryptography library based on
+https://invent.kde.org/libraries/qca. The fork incorporates compatible upstream
+changes and extends the public API, cryptographic providers and platform support.
+Its interfaces and implementations are intended for any compatible application.
 
   Changes to mainstream:
     * Fixed a few issues in keystore leading to hard lock on QCA initialization
@@ -22,13 +18,10 @@ was born.
     * Added TLS channel binding
     * SRTP support (see "use_srtp" in RFC5764)
     * Added Android certificate system store support
+    * Added native Windows CNG, Schannel TLS and DTLS support
 
-  Planned features:
-    * MS Windows SChannel plugin
-
-  Any changes from upstream are regularly merged back to this fork. So it has all the best from both worlds.
-
-  If anyone desires to split the fork into smaller changes and make pull requests to the upstream, Psi IM team will support this as much as possible. Feel free to join our [XMPP chat](xmpp:psi-dev@conference.jabber.ru?join).
+  The maintainers welcome focused patches, reproducible bug reports and upstream
+contributions. Changes should preserve reusable library and provider contracts.
 
 Description
 -----------
@@ -59,8 +52,8 @@ License
 History
 -------
 
-QCA was originally created to support the security needs of the
-Psi XMPP/Jabber client project ( http://psi-im.org/ ).
+QCA was originally developed by Justin Karneges. Its plugin architecture
+separates the public cryptographic API from backend implementations.
 
 
 Old Changes list

@@ -24,6 +24,8 @@
 // when the running Windows has it.
 
 #include "aesmodes.h"
+#include "native_keys.h"
+#include "native_tls.h"
 
 #include <QtCrypto>
 #include <QtPlugin>
@@ -37,6 +39,8 @@
 #include <bcrypt.h>
 
 #include <array>
+#include <cstring>
+#include <limits>
 
 using namespace QCA;
 
@@ -83,7 +87,15 @@ enum class Algorithm
     HmacSHA384,
     HmacSHA512,
     AES,
+    AES_GCM,
     Count
+};
+
+struct AlgorithmInfo
+{
+    BCRYPT_ALG_HANDLE handle       = nullptr;
+    int               objectLength = 0;
+    int               hashLength   = 0;
 };
 
 class WinCryptoProvider : public Provider
@@ -91,9 +103,9 @@ class WinCryptoProvider : public Provider
 public:
     ~WinCryptoProvider() override
     {
-        for (auto &handle : _handles)
-            if (handle)
-                BCryptCloseAlgorithmProvider(handle, 0);
+        for (const auto &algorithm : _algorithms)
+            if (algorithm.handle)
+                BCryptCloseAlgorithmProvider(algorithm.handle, 0);
     }
 
     int qcaVersion() const override
@@ -111,27 +123,38 @@ public:
 
     // Opened on first use and kept until the provider goes away. CNG
     // algorithm handles may be used from several threads at once.
-    BCRYPT_ALG_HANDLE handle(Algorithm algorithm) const
+    AlgorithmInfo algorithmInfo(Algorithm algorithm) const
     {
         QMutexLocker locker(&_mutex);
         const int    index = int(algorithm);
         if (!_opened[index]) {
-            _opened[index]  = true;
-            _handles[index] = open(algorithm);
+            _opened[index]    = true;
+            auto &info        = _algorithms[index];
+            info.handle       = open(algorithm);
+            const auto length = [&](const wchar_t *property) {
+                DWORD value = 0, written = 0;
+                if (!info.handle ||
+                    !ok(BCryptGetProperty(
+                        info.handle, property, reinterpret_cast<PUCHAR>(&value), sizeof(value), &written, 0)) ||
+                    written != sizeof(value) || value > DWORD(std::numeric_limits<int>::max()))
+                    return 0;
+                return int(value);
+            };
+            info.objectLength = length(BCRYPT_OBJECT_LENGTH);
+            if (algorithm != Algorithm::AES && algorithm != Algorithm::AES_GCM)
+                info.hashLength = length(BCRYPT_HASH_LENGTH);
         }
-        return _handles[index];
+        return _algorithms[index];
     }
 
-    // The digest length of a hash or HMAC algorithm, in bytes.
+    BCRYPT_ALG_HANDLE handle(Algorithm algorithm) const
+    {
+        return algorithmInfo(algorithm).handle;
+    }
+
     int hashLength(Algorithm algorithm) const
     {
-        BCRYPT_ALG_HANDLE alg    = handle(algorithm);
-        DWORD             length = 0, written = 0;
-        if (!alg ||
-            !ok(BCryptGetProperty(
-                alg, BCRYPT_HASH_LENGTH, reinterpret_cast<PUCHAR>(&length), sizeof(length), &written, 0)))
-            return 0;
-        return int(length);
+        return algorithmInfo(algorithm).hashLength;
     }
 
 private:
@@ -186,6 +209,7 @@ private:
             flags = BCRYPT_ALG_HANDLE_HMAC_FLAG;
             break;
         case Algorithm::AES:
+        case Algorithm::AES_GCM:
             id = BCRYPT_AES_ALGORITHM;
             break;
         case Algorithm::Count:
@@ -194,13 +218,14 @@ private:
         BCRYPT_ALG_HANDLE alg = nullptr;
         if (!ok(BCryptOpenAlgorithmProvider(&alg, id, nullptr, flags)))
             return nullptr;
-        if (algorithm == Algorithm::AES) {
+        if (algorithm == Algorithm::AES || algorithm == Algorithm::AES_GCM) {
             // The modes are implemented in aesmodes.cpp on whole blocks.
-            if (!ok(BCryptSetProperty(alg,
-                                      BCRYPT_CHAINING_MODE,
-                                      bytes(BCRYPT_CHAIN_MODE_ECB),
-                                      ULONG(sizeof(BCRYPT_CHAIN_MODE_ECB)),
-                                      0))) {
+            if (!ok(BCryptSetProperty(
+                    alg,
+                    BCRYPT_CHAINING_MODE,
+                    bytes(algorithm == Algorithm::AES ? BCRYPT_CHAIN_MODE_ECB : BCRYPT_CHAIN_MODE_GCM),
+                    algorithm == Algorithm::AES ? sizeof(BCRYPT_CHAIN_MODE_ECB) : sizeof(BCRYPT_CHAIN_MODE_GCM),
+                    0))) {
                 BCryptCloseAlgorithmProvider(alg, 0);
                 return nullptr;
             }
@@ -208,9 +233,9 @@ private:
         return alg;
     }
 
-    mutable QMutex                                                       _mutex;
-    mutable std::array<BCRYPT_ALG_HANDLE, std::size_t(Algorithm::Count)> _handles {};
-    mutable std::array<bool, std::size_t(Algorithm::Count)>              _opened {};
+    mutable QMutex                                                   _mutex;
+    mutable std::array<AlgorithmInfo, std::size_t(Algorithm::Count)> _algorithms {};
+    mutable std::array<bool, std::size_t(Algorithm::Count)>          _opened {};
 };
 
 namespace {
@@ -219,6 +244,68 @@ WinCryptoProvider *cng(Provider *provider)
 {
     return static_cast<WinCryptoProvider *>(provider);
 }
+
+// CNG keeps pointers into the supplied object buffer. Never share or relocate
+// it while a handle is alive; duplicates get a fresh allocation. Match native
+// heap alignment. Use SecureArray's allocator directly: native mutable objects
+// must have a unique stable address and need no implicit-sharing metadata.
+class SecureObject
+{
+public:
+    SecureObject() = default;
+    explicit SecureObject(int size)
+    {
+        resize(size);
+    }
+    SecureObject(const SecureObject &)            = delete;
+    SecureObject &operator=(const SecureObject &) = delete;
+    ~SecureObject()
+    {
+        clear();
+    }
+    bool resize(int size)
+    {
+        if (size <= 0 || size > std::numeric_limits<int>::max() - 15 - int(sizeof(int)))
+            return false;
+        if (size == _size)
+            return true;
+        clear();
+        _storage = static_cast<PUCHAR>(qca_secure_alloc(size + 15));
+        if (!_storage)
+            return false;
+        _size   = size;
+        _offset = int((16 - reinterpret_cast<std::uintptr_t>(_storage) % 16) % 16);
+        return true;
+    }
+    PUCHAR data()
+    {
+        _dirty = true;
+        return _storage + _offset;
+    }
+    int size() const
+    {
+        return _size;
+    }
+    void wipe()
+    {
+        if (_dirty && _storage)
+            secureWipe(_storage, std::size_t(_size) + 15);
+        _dirty = false;
+    }
+    void clear()
+    {
+        wipe();
+        if (_storage)
+            qca_secure_free(_storage);
+        _storage = nullptr;
+        _size = _offset = 0;
+    }
+
+private:
+    PUCHAR _storage = nullptr;
+    int    _size = 0, _offset = 0;
+    bool   _dirty = false;
+};
 
 // A CNG hash or HMAC object, with the data hashed so far.
 class HashObject
@@ -232,10 +319,10 @@ public:
         reset();
     }
 
-    bool create(BCRYPT_ALG_HANDLE alg, const SecureArray *secret)
+    bool create(const AlgorithmInfo &algorithm, const SecureArray *secret)
     {
         reset();
-        if (!alg)
+        if (!algorithm.handle || !_object.resize(algorithm.objectLength))
             return false;
         PUCHAR key    = nullptr;
         ULONG  length = 0;
@@ -245,19 +332,21 @@ public:
             key    = secret->isEmpty() ? emptyInput() : bytes(secret->constData());
             length = secret->isEmpty() ? 1 : ULONG(secret->size());
         }
-        return ok(BCryptCreateHash(alg, &_hash, nullptr, 0, key, length, 0));
+        return accept(
+            BCryptCreateHash(algorithm.handle, &_hash, _object.data(), ULONG(_object.size()), key, length, 0));
     }
 
     bool duplicate(const HashObject &other)
     {
         reset();
-        return other._hash && ok(BCryptDuplicateHash(other._hash, &_hash, nullptr, 0, 0));
+        return other._hash && _object.resize(other._object.size()) &&
+            accept(BCryptDuplicateHash(other._hash, &_hash, _object.data(), ULONG(_object.size()), 0));
     }
 
     void update(const char *data, int size)
     {
-        if (_hash && size > 0)
-            BCryptHashData(_hash, bytes(data), ULONG(size), 0);
+        if (_hash && size > 0 && !ok(BCryptHashData(_hash, bytes(data), ULONG(size), 0)))
+            reset(); // Never return the digest of a silently truncated input.
     }
 
     SecureArray finish(int length)
@@ -277,24 +366,36 @@ public:
     }
 
 private:
+    bool accept(NTSTATUS status)
+    {
+        if (ok(status))
+            return true;
+        reset();
+        _object.clear();
+        return false;
+    }
     void reset()
     {
-        if (_hash)
+        if (_hash) {
             BCryptDestroyHash(_hash);
+            _object.wipe();
+        }
         _hash = nullptr;
     }
 
     BCRYPT_HASH_HANDLE _hash = nullptr;
+    SecureObject       _object;
 };
 
 // HMAC(key, data) in one call, for HKDF.
-SecureArray hmac(WinCryptoProvider *provider, Algorithm algorithm, const SecureArray &key, const QByteArray &data)
+SecureArray hmac(WinCryptoProvider *provider, Algorithm algorithm, const SecureArray &key, const MemoryRegion &data)
 {
     HashObject object;
-    if (!object.create(provider->handle(algorithm), &key))
+    const auto info = provider->algorithmInfo(algorithm);
+    if (!object.create(info, &key))
         return {};
     object.update(data.constData(), data.size());
-    return object.finish(provider->hashLength(algorithm));
+    return object.finish(info.hashLength);
 }
 
 }
@@ -355,7 +456,7 @@ public:
 
     void clear() override
     {
-        _hash.create(cng(provider())->handle(_algorithm), nullptr);
+        _hash.create(cng(provider())->algorithmInfo(_algorithm), nullptr);
     }
 
     void update(const MemoryRegion &a) override
@@ -391,7 +492,6 @@ public:
     WinCryptoHMACContext(const WinCryptoHMACContext &other)
         : MACContext(other)
         , _algorithm(other._algorithm)
-        , _key(other._key)
     {
         _hash.duplicate(other._hash);
     }
@@ -403,8 +503,7 @@ public:
 
     void setup(const SymmetricKey &key) override
     {
-        _key = key;
-        _hash.create(cng(provider())->handle(_algorithm), &_key);
+        _hash.create(cng(provider())->algorithmInfo(_algorithm), &key);
     }
 
     KeyLength keyLength() const override
@@ -420,14 +519,13 @@ public:
     void final(MemoryRegion *out) override
     {
         *out = _hash.finish(cng(provider())->hashLength(_algorithm));
-        // Ready for the same key again.
-        _hash.create(cng(provider())->handle(_algorithm), &_key);
+        // QCA keeps the key in SecureArray and calls setup() on clear(). Do
+        // not retain another key reference or recreate keyed state while idle.
     }
 
 private:
-    Algorithm   _algorithm;
-    SecureArray _key;
-    HashObject  _hash;
+    Algorithm  _algorithm;
+    HashObject _hash;
 };
 
 //----------------------------------------------------------------------------
@@ -453,6 +551,8 @@ public:
                          unsigned int                keyLength,
                          unsigned int                iterationCount) override
     {
+        if (!keyLength || keyLength > unsigned(std::numeric_limits<int>::max()) || !iterationCount)
+            return SymmetricKey();
         SecureArray       out(static_cast<int>(keyLength));
         BCRYPT_ALG_HANDLE prf = cng(provider())->handle(_algorithm);
         if (!prf || !keyLength ||
@@ -475,17 +575,26 @@ public:
                          int                         msecInterval,
                          unsigned int               *iterationCount) override
     {
-        Q_ASSERT(iterationCount != nullptr);
-        // As the OpenSSL provider: count single iterations for the given
-        // time, then derive the key with that many.
-        QElapsedTimer timer;
+        if (!iterationCount)
+            return SymmetricKey();
         *iterationCount = 0;
+        if (!keyLength || keyLength > unsigned(std::numeric_limits<int>::max()))
+            return SymmetricKey();
+        // Measure real PBKDF2 work rather than counting one-iteration calls
+        // dominated by CNG setup/allocation. Reuse the last derived sample.
+        QElapsedTimer timer;
         timer.start();
-        while (timer.elapsed() < msecInterval) {
-            makeKey(secret, salt, keyLength, 1u);
-            ++(*iterationCount);
-        }
-        return makeKey(secret, salt, keyLength, *iterationCount);
+        unsigned count = 1;
+        do {
+            auto sample = makeKey(secret, salt, keyLength, count);
+            if (sample.size() != int(keyLength))
+                return SymmetricKey();
+            if (timer.elapsed() >= msecInterval || count == std::numeric_limits<unsigned>::max()) {
+                *iterationCount = count;
+                return sample;
+            }
+            count = count > std::numeric_limits<unsigned>::max() / 2 ? std::numeric_limits<unsigned>::max() : count * 2;
+        } while (true);
     }
 
 private:
@@ -522,22 +631,30 @@ public:
 
         // Extract: a missing salt is a string of zeros as long as the hash.
         const SecureArray prk =
-            hmac(p, _algorithm, salt.isEmpty() ? SecureArray(length, 0) : SecureArray(salt), secret.toByteArray());
+            hmac(p, _algorithm, salt.isEmpty() ? SecureArray(length, 0) : SecureArray(salt), secret);
         if (prk.size() != length)
             return SymmetricKey();
 
         // Expand.
-        SecureArray out;
+        SecureArray out(int(keyLength), 0);
         SecureArray previous;
-        for (unsigned char counter = 1; unsigned(out.size()) < keyLength; ++counter) {
-            QByteArray input = previous.toByteArray() + info.toByteArray();
-            input.append(char(counter));
-            previous = hmac(p, _algorithm, prk, input);
+        unsigned    offset = 0;
+        HashObject  object;
+        const auto  infoAlgorithm = p->algorithmInfo(_algorithm);
+        for (unsigned counter = 1; offset < keyLength; ++counter) {
+            if (!object.create(infoAlgorithm, &prk))
+                return SymmetricKey();
+            object.update(previous.constData(), previous.size());
+            object.update(info.constData(), info.size());
+            const char countByte = char(counter);
+            object.update(&countByte, 1);
+            previous = object.finish(length);
             if (previous.size() != length)
                 return SymmetricKey();
-            out.append(previous);
+            const auto take = qMin(unsigned(length), keyLength - offset);
+            std::memcpy(out.data() + offset, previous.constData(), take);
+            offset += take;
         }
-        out.resize(int(keyLength));
         return out;
     }
 
@@ -554,14 +671,21 @@ namespace {
 class CngAes final : public BlockCipher
 {
 public:
-    static std::unique_ptr<CngAes> create(BCRYPT_ALG_HANDLE alg, const SecureArray &key)
+    static std::unique_ptr<CngAes> create(const AlgorithmInfo &algorithm, const SecureArray &key)
     {
-        if (!alg)
+        if (!algorithm.handle)
             return nullptr;
-        BCRYPT_KEY_HANDLE handle = nullptr;
-        if (!ok(BCryptGenerateSymmetricKey(alg, &handle, nullptr, 0, bytes(key.constData()), ULONG(key.size()), 0)))
+        auto aes = std::unique_ptr<CngAes>(new CngAes(algorithm.objectLength));
+        if (!aes->_object.size() ||
+            !ok(BCryptGenerateSymmetricKey(algorithm.handle,
+                                           &aes->_key,
+                                           aes->_object.data(),
+                                           ULONG(aes->_object.size()),
+                                           bytes(key.constData()),
+                                           ULONG(key.size()),
+                                           0)))
             return nullptr;
-        return std::unique_ptr<CngAes>(new CngAes(handle));
+        return aes;
     }
 
     ~CngAes() override
@@ -572,10 +696,11 @@ public:
 
     std::unique_ptr<BlockCipher> clone() const override
     {
-        BCRYPT_KEY_HANDLE copy = nullptr;
-        if (!ok(BCryptDuplicateKey(_key, &copy, nullptr, 0, 0)))
+        auto copy = std::unique_ptr<CngAes>(new CngAes(_object.size()));
+        if (!copy->_object.size() ||
+            !ok(BCryptDuplicateKey(_key, &copy->_key, copy->_object.data(), ULONG(copy->_object.size()), 0)))
             return nullptr;
-        return std::unique_ptr<BlockCipher>(new CngAes(copy));
+        return copy;
     }
 
     bool encrypt(const std::uint8_t *in, std::uint8_t *out, std::size_t blocks) override
@@ -592,20 +717,204 @@ public:
         return ok(BCryptDecrypt(_key, bytes(in), size, nullptr, nullptr, 0, out, size, &written, 0)) && written == size;
     }
 
+    bool encryptCbc(const std::uint8_t *in, std::uint8_t *out, std::size_t blocks, std::uint8_t *iv) override
+    {
+        if (!ok(BCryptSetProperty(
+                _key, BCRYPT_CHAINING_MODE, bytes(BCRYPT_CHAIN_MODE_CBC), sizeof(BCRYPT_CHAIN_MODE_CBC), 0)))
+            return false;
+        ULONG      written = 0;
+        const auto size    = ULONG(blocks * BlockSize);
+        const bool done =
+            ok(BCryptEncrypt(_key, bytes(in), size, nullptr, iv, BlockSize, out, size, &written, 0)) && written == size;
+        const bool restored = ok(BCryptSetProperty(
+            _key, BCRYPT_CHAINING_MODE, bytes(BCRYPT_CHAIN_MODE_ECB), sizeof(BCRYPT_CHAIN_MODE_ECB), 0));
+        return done && restored;
+    }
+
 private:
-    explicit CngAes(BCRYPT_KEY_HANDLE key)
-        : _key(key)
+    explicit CngAes(int objectLength)
+        : _object(objectLength)
     {
     }
 
     BCRYPT_KEY_HANDLE _key = nullptr;
+    SecureObject      _object;
 };
 
 Bytes toBytes(const MemoryRegion &region)
 {
+    if (region.isEmpty())
+        return {};
     const auto *data = reinterpret_cast<const std::uint8_t *>(region.constData());
     return Bytes(data, data + region.size());
 }
+
+// The common 96-bit nonce / 12..16-byte tag case is handled entirely by
+// CNG, including its hardware GHASH. Encryption streams whole blocks;
+// decryption retains ciphertext and authenticates before publishing output.
+class CngGcm
+{
+public:
+    CngGcm(const AlgorithmInfo        &algorithm,
+           const SymmetricKey         &key,
+           const InitializationVector &iv,
+           const AuthTag              &tag,
+           bool                        encrypt)
+        : _object(algorithm.objectLength)
+        , _nonce(iv)
+        , _tag(tag)
+        , _encrypt(encrypt)
+    {
+        BCRYPT_INIT_AUTH_MODE_INFO(_auth);
+        _valid = algorithm.handle && _object.size() &&
+            ok(BCryptGenerateSymmetricKey(algorithm.handle,
+                                          &_key,
+                                          _object.data(),
+                                          ULONG(_object.size()),
+                                          bytes(key.constData()),
+                                          ULONG(key.size()),
+                                          0));
+    }
+    CngGcm(const CngGcm &other)
+        : _object(other._object.size())
+        , _nonce(other._nonce)
+        , _tag(other._tag)
+        , _pending(other._pending)
+        , _auth(other._auth)
+        , _iv(other._iv)
+        , _mac(other._mac)
+        , _total(other._total)
+        , _encrypt(other._encrypt)
+    {
+        _valid = other._valid && _object.size() &&
+            ok(BCryptDuplicateKey(other._key, &_key, _object.data(), ULONG(_object.size()), 0));
+    }
+    ~CngGcm()
+    {
+        releaseKey();
+    }
+    bool update(const SecureArray &in, SecureArray *out)
+    {
+        out->clear();
+        constexpr quint64 maxBytes = (quint64(1) << 36) - 32;
+        if (!_valid || quint64(in.size()) > maxBytes - _total)
+            return fail(out);
+        _total += quint64(in.size());
+        const auto *data = reinterpret_cast<const std::uint8_t *>(in.constData());
+        auto        size = std::size_t(in.size());
+        if (!_encrypt) {
+            if (size > std::size_t(std::numeric_limits<int>::max()) - _pending.size())
+                return fail(out);
+            if (size)
+                _pending.insert(_pending.end(), data, data + size);
+            return true;
+        }
+        const auto blocks = (_pending.size() + size) / 16 * 16;
+        if (blocks > std::size_t(std::numeric_limits<int>::max()))
+            return fail(out);
+        out->resize(int(blocks));
+        std::size_t offset = 0;
+        if (!_pending.empty()) {
+            const auto take = std::min(size, 16 - _pending.size());
+            if (take) {
+                _pending.insert(_pending.end(), data, data + take);
+                data += take;
+                size -= take;
+            }
+            if (_pending.size() == 16) {
+                if (!crypt(_pending.data(), 16, out->data(), false))
+                    return fail(out);
+                secureWipe(_pending);
+                offset = 16;
+            }
+        }
+        const auto whole = size / 16 * 16;
+        if (whole && !crypt(data, ULONG(whole), out->data() + offset, false))
+            return fail(out);
+        if (size > whole)
+            _pending.insert(_pending.end(), data + whole, data + size);
+        return true;
+    }
+    bool final(SecureArray *out)
+    {
+        out->clear();
+        if (!_valid)
+            return false;
+        out->resize(int(_pending.size()));
+        // A non-null output is essential even for an empty message: a null
+        // output asks CNG for a size without performing authentication.
+        UCHAR      dummy = 0;
+        const auto size  = ULONG(_pending.size());
+        const bool success =
+            crypt(size ? _pending.data() : &dummy, size, size ? out->data() : reinterpret_cast<char *>(&dummy), true);
+        secureWipe(_pending);
+        _valid = false;
+        releaseKey();
+        if (!success)
+            out->clear();
+        return success;
+    }
+    AuthTag tag() const
+    {
+        return AuthTag(_tag);
+    }
+
+private:
+    void releaseKey()
+    {
+        if (_key)
+            BCryptDestroyKey(_key);
+        _key = nullptr;
+        _object.clear();
+        secureWipe(_iv.data(), _iv.size());
+        secureWipe(_mac.data(), _mac.size());
+    }
+    bool fail(SecureArray *out)
+    {
+        out->clear();
+        secureWipe(_pending);
+        _valid = false;
+        releaseKey();
+        return false;
+    }
+    bool crypt(const std::uint8_t *data, ULONG size, char *out, bool final)
+    {
+        _auth.pbNonce = bytes(_nonce.constData());
+        _auth.cbNonce = ULONG(_nonce.size());
+        _auth.pbTag   = reinterpret_cast<PUCHAR>(_tag.data());
+        _auth.cbTag   = ULONG(_tag.size());
+        // Decryption is a single authenticated operation, encryption is chained.
+        _auth.pbMacContext = _encrypt ? _mac.data() : nullptr;
+        _auth.cbMacContext = _encrypt ? ULONG(_mac.size()) : 0;
+        if (final)
+            _auth.dwFlags &= ~BCRYPT_AUTH_MODE_CHAIN_CALLS_FLAG;
+        else
+            _auth.dwFlags |= BCRYPT_AUTH_MODE_CHAIN_CALLS_FLAG;
+        ULONG      written = 0;
+        const auto status  = _encrypt
+            ? BCryptEncrypt(_key,
+                            bytes(data),
+                            size,
+                            &_auth,
+                            _iv.data(),
+                            ULONG(_iv.size()),
+                            reinterpret_cast<PUCHAR>(out),
+                            size,
+                            &written,
+                            0)
+            : BCryptDecrypt(
+                  _key, bytes(data), size, &_auth, nullptr, 0, reinterpret_cast<PUCHAR>(out), size, &written, 0);
+        return ok(status) && written == size;
+    }
+    BCRYPT_KEY_HANDLE                     _key = nullptr;
+    SecureObject                          _object;
+    SecureArray                           _nonce, _tag;
+    Bytes                                 _pending;
+    BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO _auth {};
+    std::array<UCHAR, 16>                 _iv {}, _mac {};
+    quint64                               _total   = 0;
+    bool                                  _encrypt = false, _valid = false;
+};
 
 }
 
@@ -628,6 +937,7 @@ public:
         , _mode(other._mode)
         , _pkcs7(other._pkcs7)
         , _engine(other._engine ? new ModeEngine(*other._engine) : nullptr)
+        , _gcm(other._gcm ? new CngGcm(*other._gcm) : nullptr)
         , _tag(other._tag)
     {
     }
@@ -641,9 +951,14 @@ public:
     {
         _tag = tag;
         _engine.reset();
+        _gcm.reset();
         if (key.size() != _keyBytes)
             return;
-        auto aes = CngAes::create(cng(provider())->handle(Algorithm::AES), key);
+        if (_mode == CipherMode::GCM && iv.size() == 12 && tag.size() >= 12 && tag.size() <= 16) {
+            _gcm.reset(new CngGcm(cng(provider())->algorithmInfo(Algorithm::AES_GCM), key, iv, tag, dir == Encode));
+            return;
+        }
+        auto aes = CngAes::create(cng(provider())->algorithmInfo(Algorithm::AES), key);
         if (!aes)
             return;
         Bytes ivBytes  = toBytes(iv);
@@ -670,23 +985,41 @@ public:
 
     bool update(const SecureArray &in, SecureArray *out) override
     {
+        out->clear();
+        if (_gcm)
+            return _gcm->update(in, out);
         if (!_engine)
             return false;
         Bytes      result;
         const bool done = _engine->update(
             reinterpret_cast<const std::uint8_t *>(in.constData()), std::size_t(qMax(0, in.size())), result);
-        *out = SecureArray(QByteArray(reinterpret_cast<const char *>(result.data()), int(result.size())));
+        out->clear();
+        if (done && !result.empty()) {
+            out->resize(int(result.size()));
+            std::memcpy(out->data(), result.data(), result.size());
+        }
         secureWipe(result);
         return done;
     }
 
     bool final(SecureArray *out) override
     {
+        out->clear();
+        if (_gcm) {
+            const bool done = _gcm->final(out);
+            if (done)
+                _tag = _gcm->tag();
+            return done;
+        }
         if (!_engine)
             return false;
         Bytes      result;
         const bool done = _engine->final(result);
-        *out            = SecureArray(QByteArray(reinterpret_cast<const char *>(result.data()), int(result.size())));
+        out->clear();
+        if (done && !result.empty()) {
+            out->resize(int(result.size()));
+            std::memcpy(out->data(), result.data(), result.size());
+        }
         secureWipe(result);
         if (done && _mode == CipherMode::GCM && !_engine->tag().empty())
             _tag = AuthTag(SecureArray(
@@ -699,6 +1032,7 @@ private:
     CipherMode                  _mode;
     bool                        _pkcs7;
     std::unique_ptr<ModeEngine> _engine;
+    std::unique_ptr<CngGcm>     _gcm;
     AuthTag                     _tag;
 };
 
@@ -765,6 +1099,12 @@ QStringList WinCryptoProvider::features() const
 {
     QStringList list;
     list += QStringLiteral("random");
+    list += QStringLiteral("cert");
+    list += QStringLiteral("tls");
+    list += QStringLiteral("dtls");
+    list += QStringLiteral("dtls-srtp");
+    list += QStringLiteral("rsa");
+    list += QStringLiteral("pkey");
     for (const auto &type : hashTypes)
         list += QLatin1String(type.name);
     for (const auto &type : sha3Types)
@@ -784,6 +1124,16 @@ QStringList WinCryptoProvider::features() const
 
 Provider::Context *WinCryptoProvider::createContext(const QString &type)
 {
+    if (type == QLatin1String("rsa"))
+        return createRSAContext(this);
+    if (type == QLatin1String("pkey"))
+        return createPKeyContext(this);
+    if (type == QLatin1String("cert"))
+        return createCertificateContext(this);
+    if (type == QLatin1String("tls"))
+        return createTLSContext(this);
+    if (type == QLatin1String("dtls"))
+        return createTLSContext(this, true);
     if (type == QLatin1String("random"))
         return new WinCryptoRandomContext(this);
     for (const auto &hash : hashTypes) {

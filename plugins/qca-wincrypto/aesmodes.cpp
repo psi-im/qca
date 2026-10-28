@@ -21,6 +21,9 @@
 
 #include <algorithm>
 #include <cstring>
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+#include <intrin.h>
+#endif
 
 namespace wincryptoQCAPlugin {
 
@@ -92,15 +95,38 @@ void xorBlock(std::uint8_t *out, const std::uint8_t *a, const std::uint8_t *b)
 
 void secureWipe(void *data, std::size_t size)
 {
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+    // The same non-elidable store intrinsic used by Windows' secure erasure.
+    // Wiping CNG object buffers byte-by-byte otherwise dominates short MACs.
+    if (size)
+        __stosb(static_cast<unsigned char *>(data), 0, size);
+#else
     volatile auto *p = static_cast<volatile std::uint8_t *>(data);
     while (size--)
         *p++ = 0;
+#endif
 }
 
 void secureWipe(Bytes &bytes)
 {
     secureWipe(bytes.data(), bytes.size());
     bytes.clear();
+}
+
+bool BlockCipher::encryptCbc(const std::uint8_t *in, std::uint8_t *out, std::size_t blocks, std::uint8_t *iv)
+{
+    std::uint8_t block[BlockSize];
+    bool         success = true;
+    for (std::size_t i = 0; i < blocks; ++i) {
+        xorBlock(block, in + i * BlockSize, iv);
+        if (!encrypt(block, out + i * BlockSize, 1)) {
+            success = false;
+            break;
+        }
+        std::memcpy(iv, out + i * BlockSize, BlockSize);
+    }
+    secureWipe(block, BlockSize);
+    return success;
 }
 
 ModeEngine::ModeEngine(CipherMode                   mode,
@@ -116,8 +142,10 @@ ModeEngine::ModeEngine(CipherMode                   mode,
 {
     if (!_cipher)
         return;
-    if (pkcs7 && mode != CipherMode::ECB && mode != CipherMode::CBC)
+    if (pkcs7 && mode != CipherMode::ECB && mode != CipherMode::CBC) {
+        clearSecrets();
         return;
+    }
 
     switch (mode) {
     case CipherMode::ECB:
@@ -125,23 +153,31 @@ ModeEngine::ModeEngine(CipherMode                   mode,
     case CipherMode::CBC:
     case CipherMode::OFB:
     case CipherMode::CTR:
-        if (iv.size() != BlockSize)
+        if (iv.size() != BlockSize) {
+            clearSecrets();
             return;
+        }
         std::memcpy(_register, iv.data(), BlockSize);
         break;
     case CipherMode::CFB:
-        if (iv.size() != BlockSize)
+        if (iv.size() != BlockSize) {
+            clearSecrets();
             return;
+        }
         // The feedback register is encrypted in place into the keystream.
         std::memcpy(_keystream, iv.data(), BlockSize);
         break;
     case CipherMode::GCM:
     {
-        if (iv.empty() || tag.size() > BlockSize || (!encrypt && tag.empty()))
+        if (iv.empty() || tag.empty() || tag.size() > BlockSize) {
+            clearSecrets();
             return;
+        }
         const Block zero {};
-        if (!_cipher->encrypt(zero, _h, 1))
+        if (!_cipher->encrypt(zero, _h, 1)) {
+            clearSecrets();
             return;
+        }
         if (iv.size() == 12) {
             std::memcpy(_j0, iv.data(), 12);
             _j0[15] = 1;
@@ -197,6 +233,12 @@ ModeEngine::ModeEngine(const ModeEngine &other)
 
 ModeEngine::~ModeEngine()
 {
+    clearSecrets();
+}
+
+void ModeEngine::clearSecrets()
+{
+    _cipher.reset();
     secureWipe(_register, BlockSize);
     secureWipe(_keystream, BlockSize);
     secureWipe(_h, BlockSize);
@@ -216,6 +258,20 @@ bool ModeEngine::update(const std::uint8_t *in, std::size_t size, Bytes &out)
 {
     if (!_valid)
         return false;
+    const auto start = out.size();
+    if (size > std::size_t(std::numeric_limits<int>::max()) - start || (size && !in) || !updateImpl(in, size, out)) {
+        if (out.size() > start)
+            secureWipe(out.data() + start, out.size() - start);
+        out.resize(start);
+        clearSecrets();
+        _valid = false;
+        return false;
+    }
+    return true;
+}
+
+bool ModeEngine::updateImpl(const std::uint8_t *in, std::size_t size, Bytes &out)
+{
     if (!size)
         return true;
 
@@ -223,24 +279,36 @@ bool ModeEngine::update(const std::uint8_t *in, std::size_t size, Bytes &out)
     case CipherMode::ECB:
     case CipherMode::CBC:
     {
-        _pending.insert(_pending.end(), in, in + size);
-        std::size_t blocks = _pending.size() / BlockSize;
-        // The last block may hold the padding: keep it for final().
-        if (!_encrypt && _pkcs7 && blocks && _pending.size() % BlockSize == 0)
+        // Only a partial block (or the last padded ciphertext block) is
+        // retained. Large updates are processed directly from the caller.
+        const bool holdLast = !_encrypt && _pkcs7;
+        if (!_pending.empty()) {
+            const auto take = std::min(size, BlockSize - _pending.size());
+            _pending.insert(_pending.end(), in, in + take);
+            in += take;
+            size -= take;
+            if (_pending.size() < BlockSize || (holdLast && !size))
+                return true;
+            if (!processBlocks(_pending.data(), 1, out))
+                return false;
+            secureWipe(_pending);
+        }
+        std::size_t blocks = size / BlockSize;
+        if (holdLast && blocks && size % BlockSize == 0)
             --blocks;
-        if (!blocks)
-            return true;
-        const bool ok = processBlocks(_pending.data(), blocks, out);
-        secureWipe(_pending.data(), blocks * BlockSize);
-        _pending.erase(_pending.begin(), _pending.begin() + std::ptrdiff_t(blocks * BlockSize));
-        return ok;
+        if (blocks && !processBlocks(in, blocks, out))
+            return false;
+        in += blocks * BlockSize;
+        size -= blocks * BlockSize;
+        _pending.insert(_pending.end(), in, in + size);
+        return true;
     }
     case CipherMode::CFB:
     case CipherMode::OFB:
     case CipherMode::CTR:
         return stream(in, size, out);
     case CipherMode::GCM:
-        if (_textBytes + size > MaxGcmBytes)
+        if (size > MaxGcmBytes - _textBytes || size > std::size_t(std::numeric_limits<int>::max()) - _pending.size())
             return false;
         _textBytes += size;
         if (!_encrypt) {
@@ -262,8 +330,20 @@ bool ModeEngine::final(Bytes &out)
 {
     if (!_valid)
         return false;
-    _valid = false; // The engine is done either way.
+    _valid           = false; // The engine is done either way.
+    const auto start = out.size();
+    const bool done  = finalImpl(out);
+    if (!done) {
+        if (out.size() > start)
+            secureWipe(out.data() + start, out.size() - start);
+        out.resize(start);
+    }
+    clearSecrets();
+    return done;
+}
 
+bool ModeEngine::finalImpl(Bytes &out)
+{
     switch (_mode) {
     case CipherMode::ECB:
     case CipherMode::CBC:
@@ -288,10 +368,12 @@ bool ModeEngine::final(Bytes &out)
             secureWipe(_pending);
             if (!ok || last.size() != BlockSize)
                 return false;
-            const std::uint8_t pad    = last[BlockSize - 1];
-            bool               padded = pad >= 1 && pad <= BlockSize;
-            for (std::size_t i = 0; padded && i < pad; ++i)
-                padded = last[BlockSize - 1 - i] == pad;
+            const std::uint8_t pad = last[BlockSize - 1];
+            // Inspect the entire block, independently of padding bytes.
+            unsigned bad = unsigned(pad == 0) | unsigned(pad > BlockSize);
+            for (std::size_t i = 0; i < BlockSize; ++i)
+                bad |= unsigned(last[BlockSize - 1 - i] ^ pad) & (0u - unsigned(i < pad));
+            const bool padded = bad == 0;
             if (padded)
                 out.insert(out.end(), last.begin(), last.end() - pad);
             secureWipe(last);
@@ -338,16 +420,7 @@ bool ModeEngine::processBlocks(const std::uint8_t *in, std::size_t blocks, Bytes
         return _encrypt ? _cipher->encrypt(in, result, blocks) : _cipher->decrypt(in, result, blocks);
 
     if (_encrypt) {
-        // CBC encryption chains every block through the previous one.
-        Block block;
-        for (std::size_t i = 0; i < blocks; ++i) {
-            xorBlock(block, in + i * BlockSize, _register);
-            if (!_cipher->encrypt(block, result + i * BlockSize, 1))
-                return false;
-            std::memcpy(_register, result + i * BlockSize, BlockSize);
-        }
-        secureWipe(block, BlockSize);
-        return true;
+        return _cipher->encryptCbc(in, result, blocks, _register);
     }
 
     // CBC decryption decrypts all blocks at once, then unchains them.
@@ -366,7 +439,28 @@ bool ModeEngine::stream(const std::uint8_t *in, std::size_t size, Bytes &out)
     const std::size_t start = out.size();
     out.resize(start + size);
     std::uint8_t *result = out.data() + start;
-    for (std::size_t i = 0; i < size; ++i) {
+    Bytes         counters, counterStream;
+    for (std::size_t i = 0; i < size;) {
+        if ((_mode == CipherMode::CTR || _mode == CipherMode::GCM) && _used == BlockSize && size - i >= BlockSize) {
+            // Amortize the CNG call over up to 64 counters, retaining only a
+            // fixed-size temporary instead of allocating for the whole input.
+            const auto blocks = std::min<std::size_t>(64, (size - i) / BlockSize);
+            counters.resize(blocks * BlockSize);
+            counterStream.resize(blocks * BlockSize);
+            for (std::size_t b = 0; b < blocks; ++b) {
+                std::memcpy(counters.data() + b * BlockSize, _register, BlockSize);
+                if (_mode == CipherMode::GCM)
+                    increment32(_register);
+                else
+                    increment128(_register);
+            }
+            if (!_cipher->encrypt(counters.data(), counterStream.data(), blocks))
+                return false;
+            for (std::size_t b = 0; b < counterStream.size(); ++b)
+                result[i + b] = in[i + b] ^ counterStream[b];
+            i += counterStream.size();
+            continue;
+        }
         if (_used == BlockSize) {
             if (!nextKeystream())
                 return false;
@@ -381,6 +475,7 @@ bool ModeEngine::stream(const std::uint8_t *in, std::size_t size, Bytes &out)
             result[i] = _keystream[_used] ^ byte;
         }
         ++_used;
+        ++i;
     }
     return true;
 }
@@ -448,12 +543,12 @@ bool ModeEngine::gcmTag(Block tag)
     Block lengths {};
     storeBigEndian(lengths + 8, _textBytes * 8);
     ghashBlock(lengths);
-    Block mask;
-    if (!_cipher->encrypt(_j0, mask, 1))
-        return false;
-    xorBlock(tag, _ghash, mask);
+    Block      mask;
+    const bool done = _cipher->encrypt(_j0, mask, 1);
+    if (done)
+        xorBlock(tag, _ghash, mask);
     secureWipe(mask, BlockSize);
-    return true;
+    return done;
 }
 
 }

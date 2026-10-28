@@ -30,15 +30,44 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <vector>
 
 namespace wincryptoQCAPlugin {
 
-using Bytes = std::vector<std::uint8_t>;
-
 // Overwrites memory in a way the compiler does not remove.
 void secureWipe(void *data, std::size_t size);
+
+// Wipe old allocations too, including those discarded when a vector grows.
+template<class T> class WipingAllocator : public std::allocator<T>
+{
+public:
+    using value_type = T;
+    template<class U> struct rebind
+    {
+        using other = WipingAllocator<U>;
+    };
+    WipingAllocator() = default;
+    template<class U> WipingAllocator(const WipingAllocator<U> &)
+    {
+    }
+    void deallocate(T *p, std::size_t count)
+    {
+        secureWipe(p, count * sizeof(T));
+        std::allocator<T>::deallocate(p, count);
+    }
+};
+template<class T, class U> bool operator==(const WipingAllocator<T> &, const WipingAllocator<U> &)
+{
+    return true;
+}
+template<class T, class U> bool operator!=(const WipingAllocator<T> &, const WipingAllocator<U> &)
+{
+    return false;
+}
+using Bytes = std::vector<std::uint8_t, WipingAllocator<std::uint8_t>>;
+
 void secureWipe(Bytes &bytes);
 
 // A block cipher with 16-byte blocks, used in ECB mode on whole blocks.
@@ -51,6 +80,7 @@ public:
     virtual std::unique_ptr<BlockCipher> clone() const = 0;
     virtual bool                         encrypt(const std::uint8_t *in, std::uint8_t *out, std::size_t blocks) = 0;
     virtual bool                         decrypt(const std::uint8_t *in, std::uint8_t *out, std::size_t blocks) = 0;
+    virtual bool encryptCbc(const std::uint8_t *in, std::uint8_t *out, std::size_t blocks, std::uint8_t *iv);
 };
 
 enum class CipherMode
@@ -111,6 +141,9 @@ public:
 private:
     using Block = std::uint8_t[BlockCipher::BlockSize];
 
+    bool updateImpl(const std::uint8_t *in, std::size_t size, Bytes &out);
+    bool finalImpl(Bytes &out);
+    void clearSecrets();
     bool processBlocks(const std::uint8_t *in, std::size_t blocks, Bytes &out);
     bool stream(const std::uint8_t *in, std::size_t size, Bytes &out);
     bool nextKeystream();

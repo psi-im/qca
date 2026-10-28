@@ -80,7 +80,7 @@ public:
         QCA::CertificateChain chain;
         chain.append(certificate);
         m_server.setCertificate(chain, privateKey);
-        if (mutualCertificate) {
+        if (mutualCertificate || provider == QLatin1String("qca-wincrypto")) {
             m_server.setTrustedCertificates(trusted);
             m_client.setCertificate(chain, privateKey);
         }
@@ -444,15 +444,30 @@ void DTLSSRTPUnitTest::negotiateAndExport()
     if (provider.isEmpty())
         QSKIP("No DTLS-SRTP provider with certificate and private-key support is available");
 
-    QCA::ConvertResult     certificateResult = QCA::ErrorDecode;
-    QCA::ConvertResult     keyResult         = QCA::ErrorDecode;
-    const QCA::Certificate certificate =
-        QCA::Certificate::fromPEMFile(QStringLiteral("dtlssrtp-certs/default.crt"), &certificateResult, provider);
-    const QCA::PrivateKey privateKey = QCA::PrivateKey::fromPEMFile(
-        QStringLiteral("dtlssrtp-certs/default.key"), QCA::SecureArray(), &keyResult, provider);
-
-    QCOMPARE(certificateResult, QCA::ConvertGood);
-    QCOMPARE(keyResult, QCA::ConvertGood);
+    QCA::Certificate certificate;
+    QCA::PrivateKey  privateKey;
+    if (provider == QLatin1String("qca-wincrypto")) {
+        // Native identities deliberately do not expose private-key serialization.
+        privateKey = QCA::KeyGenerator().createRSA(2048, 65537, provider);
+        QVERIFY(!privateKey.isNull());
+        QCA::CertificateOptions options;
+        QCA::CertificateInfo    info;
+        info.insert(QCA::CommonName, QStringLiteral("example.com"));
+        options.setInfo(info);
+        options.setSerialNumber(QCA::BigInteger(1));
+        const auto now = QDateTime::currentDateTimeUtc();
+        options.setValidityPeriod(now.addSecs(-60), now.addDays(1));
+        options.setConstraints({QCA::DigitalSignature, QCA::KeyEncipherment, QCA::ClientAuth, QCA::ServerAuth});
+        certificate = QCA::Certificate(options, privateKey, provider);
+    } else {
+        QCA::ConvertResult certificateResult = QCA::ErrorDecode, keyResult = QCA::ErrorDecode;
+        certificate =
+            QCA::Certificate::fromPEMFile(QStringLiteral("dtlssrtp-certs/default.crt"), &certificateResult, provider);
+        privateKey = QCA::PrivateKey::fromPEMFile(
+            QStringLiteral("dtlssrtp-certs/default.key"), QCA::SecureArray(), &keyResult, provider);
+        QCOMPARE(certificateResult, QCA::ConvertGood);
+        QCOMPARE(keyResult, QCA::ConvertGood);
+    }
     QVERIFY(!certificate.isNull());
     QVERIFY(!privateKey.isNull());
 

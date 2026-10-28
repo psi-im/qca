@@ -170,6 +170,43 @@ jobs:
         run: |
           build-asan/bin/dtlssrtpunittest repeatedCertificateAndHandshakeLifetime
 
+  windows-native-crypto:
+    name: Windows CNG without OpenSSL (shared=${{ matrix.shared }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shared: ["ON", "OFF"]
+    steps:
+      - uses: actions/checkout@v4
+      - id: qt
+        uses: ./.github/actions/load-dependency-lock
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ steps.qt.outputs.qt_version }}
+          aqtsource: git+https://github.com/miurahr/aqtinstall.git@8c3695d4a4e1ceabf6a74dc6c79681656dc6b74b
+          cache: true
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Configure CNG as the only provider
+        shell: pwsh
+        run: >-
+          cmake -S . -B native-build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/native-sdk
+          -DBUILD_WITH_QT6=ON -DBUILD_SHARED_LIBS=${{ matrix.shared }}
+          -DBUILD_PLUGINS=wincrypto -DBUILD_TESTS=ON -DBUILD_TOOLS=OFF
+          -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE
+      - name: Build and exercise native crypto and TLS
+        shell: pwsh
+        env:
+          QT_FORCE_STDERR_LOGGING: "1"
+        run: |
+          cmake --build native-build --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir native-build --output-on-failure --timeout 60 -R '^(WinCrypto.*|DTLSSRTP|Hashing|SymmetricCipher|MessageAuthenticationCode|KeyDerivationFunction|SaslScram|SaslChannelBinding|SecureFile\..*)$'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --install native-build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
   windows-qt5:
     runs-on: windows-2022
     steps:
@@ -211,6 +248,7 @@ jobs:
             -DBUILD_TESTS=ON \
             -DBUILD_TOOLS=OFF \
             -DBUILD_PLUGINS='ossl;wincrypto' \
+            -DWINCRYPTO_TEST_OPENSSL_INTEROP=ON \
             -DLOAD_SHARED_PLUGINS=ON \
             -DQCA_SUFFIX=qt5 \
             -DUSE_RELATIVE_PATHS=ON
