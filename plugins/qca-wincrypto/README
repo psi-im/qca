@@ -16,7 +16,7 @@ Features
   sha3_256 sha3_384 sha3_512      only where CNG has SHA-3 (Windows 11
                                   24H2 and later); detected at run time
   hmac(md5) hmac(sha1) hmac(sha256) hmac(sha384) hmac(sha512)
-  pbkdf2(sha1) pbkdf2(sha256) pbkdf2(sha512)
+  pbkdf2(sha1) pbkdf2(sha256) pbkdf2(sha384) pbkdf2(sha512)
                                   BCryptDeriveKeyPBKDF2
   hkdf(sha256)                    RFC 5869 on top of CNG HMAC
   aes128-* aes192-* aes256-*      modes ecb, cbc, cbc-pkcs7, cfb, ofb,
@@ -31,8 +31,8 @@ Features
                                   certificates, packet MTU, retransmission
   dtls-srtp                       RFC 5764 profile negotiation and export
                                   of directional SRTP master keys/salts
-  rsa pkey                        opaque local RSA identities, 2048..8192
-                                  bits / exponent 65537, self-signed certs
+  rsa pkey                        encryption, streaming signatures,
+                                  key construction and DER/PEM I/O
 
 AES-GCM with a 96-bit nonce and a 12..16-byte tag uses CNG's native GCM,
 including accelerated GHASH. Encryption streams complete blocks and
@@ -95,15 +95,39 @@ belongs to the media implementation (for example libSRTP), not this plugin.
 The caller must authenticate the peer certificate or fingerprint before
 using the material.
 
-Local RSA generation and self-signed certificate creation support
-DTLS identities. These keys are not serializable through QCA; public views
-keep public metadata without retaining the native private key. General QCA
-RSA encryption/decryption/signing/verification, component-based key
-construction, key import/export, DSA, DH, EC, Ed25519, certificate public-key
-extraction, CSR, CMS and PKCS#12 are not implemented.
-QCA's canSign()/canEncrypt()/canDecrypt()/canVerify() helpers classify keys
-by type; they are not a per-operation capability check for this partial
-RSA implementation. Use only the documented identity operations.
+RSA supports PKCS#1 v1.5, OAEP-SHA-1 and raw encryption/decryption; the
+legacy private-encrypt/public-decrypt operations support v1.5 and raw.
+Raw input must contain exactly one modulus-sized representative below N.
+SSL-specific v1.5 padding is unsupported. Signatures support PKCS#1 v1.5
+with MD5, SHA-1/256/384/512 or raw input, and PSS with SHA-1/256/384/512.
+PSS uses MGF1 with the same digest, trailer field 1 and an explicit salt
+length (default: digest length). Unsupported descriptors fail closed.
+Hashed signatures stream through CNG; raw signing buffers at most k-11
+bytes. RSA itself processes one block; bulk data belongs in symmetric
+encryption with separately protected keys.
+
+Generation supports 2048..8192 bits in 64-bit steps, exponent 65537.
+Component/DER imports accept 512..16384-bit two-prime RSA keys, subject to
+CNG validation; small imported keys are for legacy interoperability.
+Components and CRT consistency are checked before import. A public view
+owns a separate native public handle and never retains a private handle.
+RSA public keys can also be extracted from X.509 certificates.
+
+Public export uses SPKI; private export uses PKCS#8. Import additionally
+accepts PKCS#1. DER and PEM parsing is bounded (64 KiB DER / 128 KiB PEM),
+rejects trailing data and rejects restricted RSA-PSS and multi-prime keys.
+Encrypted PKCS#8 uses PBES2/PBKDF2 with AES-128/192/256-CBC or 3DES-CBC.
+Export uses HMAC-SHA-1 as specified by QCA's PBE enum, 1,300,000 iterations,
+a fresh 16-byte salt and a fresh IV. Import additionally supports SHA-256,
+SHA-384 and SHA-512 PRFs, with a 10,000,000-PRF-call work limit. Binary
+passphrases, including embedded NULs, are preserved. Select
+PBES2_AES256_SHA1 explicitly for AES: QCA's existing PBEDefault selects 3DES.
+Single DES, traditional encrypted PEM and PKCS#12 are unsupported.
+
+Private DER, components, plaintext and derived keys use SecureArray.
+Native private operations use unnamed CNG handles. The public QCA PEM API
+returns a caller-owned QString; callers must manage that plaintext copy's
+lifetime. DSA, DH, EC, Ed25519, CSR and CMS remain unsupported.
 
 Schannel identity storage
 -------------------------
@@ -151,11 +175,16 @@ deletes it on teardown; it never installs trusted certificates.
 WinCryptoDTLS covers four SRTP profiles, data-only DTLS, loss/reordering,
 small MTUs, forged alerts, bad MACs, replay, a 4 MiB datagram burst, shutdown,
 trust/cipher failures and immediate cleanup of temporary CNG keys.
+WinCryptoRSA covers key components, all supported paddings/signatures,
+16 MiB streaming signatures and clones, plaintext/password DER/PEM,
+binary passphrases, malformed input and hostile KDF metadata.
 
 Optional -DWINCRYPTO_TEST_OPENSSL_INTEROP=ON builds an independent OpenSSL
 test peer and checks both DTLS roles, datagram traffic and exact RFC 5764
-exported keys/salts for all four profiles. OpenSSL is linked only into this
-test executable. The plugin itself still has no OpenSSL dependency.
+exported keys/salts for all four profiles. It also cross-checks RSA
+encryption/signatures and PKCS#8 in both directions, including all four
+supported PBKDF2 PRFs. OpenSSL is linked only into this test executable.
+The plugin itself still has no OpenSSL dependency.
 
 CI also builds/tests shared and static QCA with wincrypto as the sole
 provider and CMake OpenSSL discovery explicitly disabled.

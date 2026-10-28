@@ -314,7 +314,7 @@ void WinCryptoTLSTest::nativeIdentities()
     const auto        key = generator.createRSA(2048, 65537, ProviderName);
     QVERIFY(!key.isNull());
     QVERIFY(key.isPrivate());
-    QVERIFY(!key.canExport());
+    QVERIFY(key.canExport());
     QCOMPARE(key.bitSize(), 2048);
     QCOMPARE(key.toRSA().e(), QCA::BigInteger(65537));
     QVERIFY(key.toRSA().n() > QCA::BigInteger(0));
@@ -344,7 +344,8 @@ void WinCryptoTLSTest::nativeIdentities()
     QVERIFY(!publicView.isPrivate());
     QCOMPARE(publicView.bitSize(), 2048);
     QCOMPARE(publicView.toRSA().n(), key.toRSA().n());
-    QVERIFY(!publicView.canExport());
+    QVERIFY(publicView.canExport());
+    QCOMPARE(cert.subjectPublicKey().toDER(), publicView.toDER());
     QVERIFY(!key.isNull());
     info.remove(QCA::CommonName);
     info.insert(QCA::CommonName, QStringLiteral("Unicode key \u03a9\u96ea"));

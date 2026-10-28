@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "native_keys.h"
+#include "aesmodes.h"
+#include "rsa_codec.h"
 #include <QCoreApplication>
 #include <QMetaObject>
 #include <QUuid>
@@ -14,6 +16,22 @@
 using namespace QCA;
 namespace wincryptoQCAPlugin {
 namespace {
+BigInteger operator-(BigInteger a, const BigInteger &b)
+{
+    return a -= b;
+}
+BigInteger operator*(BigInteger a, const BigInteger &b)
+{
+    return a *= b;
+}
+BigInteger operator/(BigInteger a, const BigInteger &b)
+{
+    return a /= b;
+}
+BigInteger operator%(BigInteger a, const BigInteger &b)
+{
+    return a %= b;
+}
 struct NativeKey
 {
     NCRYPT_KEY_HANDLE value = 0;
@@ -23,6 +41,204 @@ struct NativeKey
             NCryptFreeObject(value);
     }
 };
+SecureArray copyBytes(const char *data, int size)
+{
+    SecureArray result(size);
+    if (size)
+        std::memcpy(result.data(), data, std::size_t(size));
+    return result;
+}
+SecureArray exportNative(NCRYPT_KEY_HANDLE key, LPCWSTR format)
+{
+    DWORD size = 0;
+    if (!key || NCryptExportKey(key, 0, format, nullptr, nullptr, 0, &size, 0) != ERROR_SUCCESS || !size ||
+        size > 65536)
+        return {};
+    SecureArray result {int(size)};
+    if (NCryptExportKey(key, 0, format, nullptr, reinterpret_cast<PBYTE>(result.data()), size, &size, 0) !=
+            ERROR_SUCCESS ||
+        size > DWORD(result.size()))
+        return {};
+    result.resize(int(size));
+    return result;
+}
+std::shared_ptr<NativeKey> importNative(const SecureArray &blob, LPCWSTR format, bool privateKey)
+{
+    if (blob.isEmpty() || blob.size() > 65536)
+        return {};
+    NCRYPT_PROV_HANDLE provider = 0;
+    if (NCryptOpenStorageProvider(&provider, MS_KEY_STORAGE_PROVIDER, 0) != ERROR_SUCCESS)
+        return {};
+    auto  key    = std::make_shared<NativeKey>();
+    auto  status = NCryptImportKey(provider,
+                                   0,
+                                   format,
+                                   nullptr,
+                                   &key->value,
+                                   reinterpret_cast<PBYTE>(const_cast<char *>(blob.constData())),
+                                   DWORD(blob.size()),
+                                   NCRYPT_SILENT_FLAG | (privateKey ? NCRYPT_DO_NOT_FINALIZE_FLAG : 0));
+    DWORD policy = NCRYPT_ALLOW_EXPORT_FLAG | NCRYPT_ALLOW_PLAINTEXT_EXPORT_FLAG;
+    if (!status && privateKey)
+        status = NCryptSetProperty(
+            key->value, NCRYPT_EXPORT_POLICY_PROPERTY, reinterpret_cast<PBYTE>(&policy), sizeof(policy), 0);
+    if (!status && privateKey)
+        status = NCryptFinalizeKey(key->value, NCRYPT_SILENT_FLAG);
+    NCryptFreeObject(provider);
+    return status ? std::shared_ptr<NativeKey>() : key;
+}
+SecureArray encryptEmpty(NCRYPT_KEY_HANDLE key, int size, bool oaep)
+{
+    struct Handles
+    {
+        BCRYPT_ALG_HANDLE algorithm = nullptr;
+        BCRYPT_KEY_HANDLE key       = nullptr;
+        ~Handles()
+        {
+            if (key)
+                BCryptDestroyKey(key);
+            if (algorithm)
+                BCryptCloseAlgorithmProvider(algorithm, 0);
+        }
+    } handles;
+    const auto blob = exportNative(key, BCRYPT_RSAPUBLIC_BLOB);
+    if (blob.isEmpty() || BCryptOpenAlgorithmProvider(&handles.algorithm, BCRYPT_RSA_ALGORITHM, nullptr, 0) < 0 ||
+        BCryptImportKeyPair(handles.algorithm,
+                            nullptr,
+                            BCRYPT_RSAPUBLIC_BLOB,
+                            &handles.key,
+                            reinterpret_cast<PUCHAR>(const_cast<char *>(blob.constData())),
+                            ULONG(blob.size()),
+                            0) < 0)
+        return {};
+    // NCrypt rejects zero-byte input, whereas BCrypt implements the standard
+    // empty-message encryption. Only public material crosses this bridge.
+    BYTE                     empty   = 0;
+    ULONG                    written = 0;
+    SecureArray              output(size);
+    BCRYPT_OAEP_PADDING_INFO padding {BCRYPT_SHA1_ALGORITHM, nullptr, 0};
+    if (BCryptEncrypt(handles.key,
+                      &empty,
+                      0,
+                      oaep ? &padding : nullptr,
+                      nullptr,
+                      0,
+                      reinterpret_cast<PUCHAR>(output.data()),
+                      ULONG(size),
+                      &written,
+                      oaep ? BCRYPT_PAD_OAEP : BCRYPT_PAD_PKCS1) < 0 ||
+        written != ULONG(size))
+        return {};
+    return output;
+}
+BigInteger positiveInteger(const SecureArray &value)
+{
+    SecureArray positive(value.size() + 1);
+    positive[0] = 0;
+    if (!value.isEmpty())
+        std::memcpy(positive.data() + 1, value.constData(), std::size_t(value.size()));
+    return BigInteger(positive);
+}
+SecureArray unsignedInteger(const BigInteger &value)
+{
+    if (value <= BigInteger(0))
+        return {};
+    const auto bytes  = value.toArray();
+    int        offset = 0;
+    while (offset + 1 < bytes.size() && bytes[offset] == 0)
+        ++offset;
+    return copyBytes(bytes.constData() + offset, bytes.size() - offset);
+}
+bool nativeParts(NCRYPT_KEY_HANDLE key, bool privateKey, RsaParts *parts)
+{
+    const auto blob = exportNative(key, privateKey ? BCRYPT_RSAFULLPRIVATE_BLOB : BCRYPT_RSAPUBLIC_BLOB);
+    if (blob.size() < int(sizeof(BCRYPT_RSAKEY_BLOB)))
+        return false;
+    BCRYPT_RSAKEY_BLOB header;
+    std::memcpy(&header, blob.constData(), sizeof(header));
+    if (header.Magic != (privateKey ? BCRYPT_RSAFULLPRIVATE_MAGIC : BCRYPT_RSAPUBLIC_MAGIC))
+        return false;
+    std::size_t offset = sizeof(header);
+    const auto  take   = [&](ULONG size, SecureArray *out) {
+        if (size > std::size_t(blob.size()) - offset)
+            return false;
+        *out = copyBytes(blob.constData() + offset, int(size));
+        offset += size;
+        return true;
+    };
+    RsaParts result;
+    if (!take(header.cbPublicExp, &result.e) || !take(header.cbModulus, &result.n))
+        return false;
+    if (privateKey &&
+        (!take(header.cbPrime1, &result.p) || !take(header.cbPrime2, &result.q) || !take(header.cbPrime1, &result.dp) ||
+         !take(header.cbPrime2, &result.dq) || !take(header.cbPrime1, &result.qi) ||
+         !take(header.cbModulus, &result.d)))
+        return false;
+    if (offset != std::size_t(blob.size()))
+        return false;
+    *parts = result;
+    return true;
+}
+BigInteger gcd(BigInteger a, BigInteger b)
+{
+    while (b != BigInteger(0)) {
+        const auto remainder = a % b;
+        a                    = b;
+        b                    = remainder;
+    }
+    return a;
+}
+std::shared_ptr<NativeKey> importParts(const RsaParts &parts, bool privateKey)
+{
+    if (parts.n.size() < 64 || parts.n.size() > 2048 || parts.e.isEmpty() || parts.e.size() > 8)
+        return {};
+    const auto n = positiveInteger(parts.n), e = positiveInteger(parts.e);
+    if (e <= BigInteger(1) || e >= n || e % BigInteger(2) == BigInteger(0) || n % BigInteger(2) == BigInteger(0))
+        return {};
+    if (privateKey) {
+        if (parts.p.isEmpty() || parts.q.isEmpty() || parts.d.isEmpty() || parts.p.size() > parts.n.size() ||
+            parts.q.size() > parts.n.size() || parts.d.size() > parts.n.size())
+            return {};
+        const auto p = positiveInteger(parts.p), q = positiveInteger(parts.q), d = positiveInteger(parts.d);
+        if (p <= BigInteger(2) || q <= BigInteger(2) || p == q || p * q != n || d >= n)
+            return {};
+        const auto p1 = p - BigInteger(1), q1 = q - BigInteger(1);
+        const auto lambda = p1 / gcd(p1, q1) * q1;
+        if (e * d % lambda != BigInteger(1))
+            return {};
+        if ((!parts.dp.isEmpty() && positiveInteger(parts.dp) != d % p1) ||
+            (!parts.dq.isEmpty() && positiveInteger(parts.dq) != d % q1) ||
+            (!parts.qi.isEmpty() &&
+             (positiveInteger(parts.qi) >= p || positiveInteger(parts.qi) * q % p != BigInteger(1))))
+            return {};
+    }
+    // CNG derives CRT values from n/e/p/q; retain its validated representation.
+    const auto size = sizeof(BCRYPT_RSAKEY_BLOB) + parts.e.size() + parts.n.size() +
+        (privateKey ? parts.p.size() + parts.q.size() : 0);
+    SecureArray blob {int(size)};
+    unsigned    first   = uchar(parts.n[0]);
+    int         leading = 0;
+    while (leading < 8 && !(first & (0x80u >> leading)))
+        ++leading;
+    if (parts.n[0] == 0 || parts.n.size() * 8 - leading < 512)
+        return {};
+    BCRYPT_RSAKEY_BLOB header {ULONG(privateKey ? BCRYPT_RSAPRIVATE_MAGIC : BCRYPT_RSAPUBLIC_MAGIC),
+                               ULONG(parts.n.size() * 8 - leading),
+                               ULONG(parts.e.size()),
+                               ULONG(parts.n.size()),
+                               privateKey ? ULONG(parts.p.size()) : 0,
+                               privateKey ? ULONG(parts.q.size()) : 0};
+    std::memcpy(blob.data(), &header, sizeof(header));
+    int offset = sizeof(header);
+    for (const auto *part : {&parts.e, &parts.n, &parts.p, &parts.q}) {
+        if (!privateKey && part != &parts.e && part != &parts.n)
+            break;
+        if (!part->isEmpty())
+            std::memcpy(blob.data() + offset, part->constData(), std::size_t(part->size()));
+        offset += part->size();
+    }
+    return importNative(blob, privateKey ? BCRYPT_RSAPRIVATE_BLOB : BCRYPT_RSAPUBLIC_BLOB, privateKey);
+}
 std::shared_ptr<NativeKey> generateRSA(int bits, int exponent)
 {
     if (bits < 2048 || bits > 8192 || bits % 64 || exponent != 65537)
@@ -33,8 +249,8 @@ std::shared_ptr<NativeKey> generateRSA(int bits, int exponent)
     auto  key    = std::make_shared<NativeKey>();
     auto  status = NCryptCreatePersistedKey(provider, &key->value, NCRYPT_RSA_ALGORITHM, nullptr, 0, 0);
     DWORD length = DWORD(bits);
-    // This unnamed key stays in memory. Export is allowed only for the
-    // internal Schannel credential bridge, never through QCA serialization.
+    // This unnamed key stays in memory. QCA serialization and the Schannel
+    // credential bridge export into protected temporary buffers.
     DWORD policy = NCRYPT_ALLOW_EXPORT_FLAG | NCRYPT_ALLOW_PLAINTEXT_EXPORT_FLAG;
     if (!status)
         status =
@@ -50,6 +266,13 @@ std::shared_ptr<NativeKey> generateRSA(int bits, int exponent)
 
 class WinRSA : public RSAContext
 {
+    enum class Operation
+    {
+        Idle,
+        Sign,
+        Verify
+    };
+
 public:
     explicit WinRSA(Provider *provider)
         : RSAContext(provider)
@@ -59,9 +282,10 @@ public:
         : RSAContext(other)
         , _key(other._key)
         , _public(other._public)
-        , _publicBits(other._publicBits)
-        , _publicN(other._publicN)
-        , _publicE(other._publicE)
+        , _hash(other._hash ? std::make_unique<Hash>(*other._hash) : nullptr)
+        , _raw(other._raw)
+        , _signature(other._signature)
+        , _operation(other._operation)
     {
     }
     ~WinRSA() override
@@ -75,7 +299,7 @@ public:
     }
     bool isNull() const override
     {
-        return !_key && !_publicBits;
+        return !_key;
     }
     PKey::Type type() const override
     {
@@ -87,22 +311,18 @@ public:
     }
     bool canExport() const override
     {
-        return false;
+        return bool(_key);
     }
     void convertToPublic() override
     {
-        // Keep only already-public metadata in this view. In particular, a
-        // public view must not prolong the lifetime of the native private key.
-        _publicN    = n();
-        _publicE    = e();
-        _publicBits = bits();
-        _key.reset();
+        clearOperation();
+        if (_public || !_key)
+            return;
+        _key    = importNative(exportNative(_key->value, BCRYPT_RSAPUBLIC_BLOB), BCRYPT_RSAPUBLIC_BLOB, false);
         _public = true;
     }
     int bits() const override
     {
-        if (_public)
-            return _publicBits;
         DWORD value = 0, written = 0;
         return _key &&
                 NCryptGetProperty(
@@ -122,37 +342,232 @@ public:
                 QMetaObject::invokeMethod(this, [this] { emit finished(); }, Qt::QueuedConnection);
             });
     }
-    void createPrivate(const BigInteger &,
-                       const BigInteger &,
-                       const BigInteger &,
-                       const BigInteger &,
-                       const BigInteger &) override
+    void createPrivate(const BigInteger &n,
+                       const BigInteger &e,
+                       const BigInteger &p,
+                       const BigInteger &q,
+                       const BigInteger &d) override
     {
         clearKey();
+        RsaParts parts;
+        parts.n = unsignedInteger(n);
+        parts.e = unsignedInteger(e);
+        parts.p = unsignedInteger(p);
+        parts.q = unsignedInteger(q);
+        parts.d = unsignedInteger(d);
+        _key    = importParts(parts, true);
     }
-    void createPublic(const BigInteger &, const BigInteger &) override
+    void createPublic(const BigInteger &n, const BigInteger &e) override
     {
         clearKey();
+        RsaParts parts;
+        parts.n = unsignedInteger(n);
+        parts.e = unsignedInteger(e);
+        _key    = importParts(parts, false);
+        _public = true;
     }
     BigInteger n() const override
     {
-        return _public ? _publicN : component(false);
+        return component(0);
     }
     BigInteger e() const override
     {
-        return _public ? _publicE : component(true);
+        return component(1);
     }
     BigInteger p() const override
     {
-        return {};
+        return component(2);
     }
     BigInteger q() const override
     {
-        return {};
+        return component(3);
     }
     BigInteger d() const override
     {
-        return {};
+        return component(4);
+    }
+    int maximumEncryptSize(EncryptionAlgorithm algorithm) const override
+    {
+        const int size = (bits() + 7) / 8;
+        if (!size)
+            return 0;
+        switch (algorithm) {
+        case EME_PKCS1v15:
+            return std::max(0, size - 11);
+        case EME_PKCS1_OAEP:
+            return isPrivate() ? 0 : std::max(0, size - 42);
+        case EME_NO_PADDING:
+            return size;
+        default:
+            return 0;
+        }
+    }
+    SecureArray encrypt(const SecureArray &input, EncryptionAlgorithm algorithm) override
+    {
+        const int size = (bits() + 7) / 8;
+        if (!_key || input.size() > maximumEncryptSize(algorithm) ||
+            (algorithm == EME_NO_PADDING && input.size() != size))
+            return {};
+        if (algorithm == EME_PKCS1v15 && isPrivate())
+            return sign(input, nullptr, 0, false);
+        if (algorithm != EME_PKCS1v15 && algorithm != EME_PKCS1_OAEP && algorithm != EME_NO_PADDING)
+            return {};
+        if (algorithm == EME_PKCS1_OAEP && isPrivate())
+            return {};
+        if (input.isEmpty())
+            return encryptEmpty(_key->value, size, algorithm == EME_PKCS1_OAEP);
+        BCRYPT_OAEP_PADDING_INFO padding {BCRYPT_SHA1_ALGORITHM, nullptr, 0};
+        const DWORD              flags = algorithm == EME_PKCS1v15 ? NCRYPT_PAD_PKCS1_FLAG
+            : algorithm == EME_PKCS1_OAEP                          ? NCRYPT_PAD_OAEP_FLAG
+                                                                   : NCRYPT_NO_PADDING_FLAG;
+        SecureArray              output(size);
+        DWORD                    written   = 0;
+        const auto               operation = algorithm == EME_NO_PADDING && isPrivate() ? NCryptDecrypt : NCryptEncrypt;
+        if (operation(_key->value,
+                      mutableBytes(input),
+                      DWORD(input.size()),
+                      algorithm == EME_PKCS1_OAEP ? &padding : nullptr,
+                      reinterpret_cast<PBYTE>(output.data()),
+                      DWORD(size),
+                      &written,
+                      flags | NCRYPT_SILENT_FLAG) != ERROR_SUCCESS ||
+            written != DWORD(size))
+            return {};
+        return output;
+    }
+    bool decrypt(const SecureArray &input, SecureArray *output, EncryptionAlgorithm algorithm) override
+    {
+        if (!output)
+            return false;
+        // Keep the input alive if the caller uses the same SecureArray for both.
+        const SecureArray saved = input;
+        output->clear();
+        const int size = (bits() + 7) / 8;
+        if (!_key || saved.size() != size ||
+            (algorithm != EME_PKCS1v15 && algorithm != EME_PKCS1_OAEP && algorithm != EME_NO_PADDING) ||
+            (algorithm == EME_PKCS1_OAEP && !isPrivate()))
+            return false;
+        BCRYPT_OAEP_PADDING_INFO padding {BCRYPT_SHA1_ALGORITHM, nullptr, 0};
+        const DWORD              flags = !isPrivate() || algorithm == EME_NO_PADDING ? NCRYPT_NO_PADDING_FLAG
+            : algorithm == EME_PKCS1v15                                              ? NCRYPT_PAD_PKCS1_FLAG
+                                                                                     : NCRYPT_PAD_OAEP_FLAG;
+        SecureArray              plain(size);
+        DWORD                    written   = 0;
+        const auto               operation = isPrivate() ? NCryptDecrypt : NCryptEncrypt;
+        if (operation(_key->value,
+                      mutableBytes(saved),
+                      DWORD(saved.size()),
+                      algorithm == EME_PKCS1_OAEP ? &padding : nullptr,
+                      reinterpret_cast<PBYTE>(plain.data()),
+                      DWORD(size),
+                      &written,
+                      flags | NCRYPT_SILENT_FLAG) != ERROR_SUCCESS ||
+            written > DWORD(size))
+            return false;
+        plain.resize(int(written));
+        if (!isPrivate() && algorithm == EME_PKCS1v15) {
+            // QCA's legacy public "decrypt" recovers a type-1 signature block.
+            // It contains public data; private type-2 unpadding stays in CNG.
+            if (plain.size() < 11 || plain[0] || plain[1] != 1)
+                return false;
+            int offset = 2;
+            while (offset < plain.size() && uchar(plain[offset]) == 0xff)
+                ++offset;
+            if (offset < 10 || offset >= plain.size() || plain[offset])
+                return false;
+            plain = copyBytes(plain.constData() + offset + 1, plain.size() - offset - 1);
+        }
+        *output = plain;
+        return true;
+    }
+    void startSign(SignatureAlgorithm algorithm, SignatureFormat) override
+    {
+        start(algorithm, Operation::Sign);
+    }
+    void startVerify(SignatureAlgorithm algorithm, SignatureFormat) override
+    {
+        start(algorithm, Operation::Verify);
+    }
+    void update(const MemoryRegion &input) override
+    {
+        if (_operation == Operation::Idle)
+            return;
+        if (_hash)
+            _hash->update(input);
+        else {
+            const auto limit = std::size_t(maximumEncryptSize(EME_PKCS1v15));
+            if (std::size_t(input.size()) > limit - _raw.size()) {
+                clearOperation();
+                return;
+            }
+            if (input.size())
+                _raw.insert(_raw.end(), input.constData(), input.constData() + input.size());
+        }
+    }
+    QByteArray endSign() override
+    {
+        if (_operation != Operation::Sign) {
+            clearOperation();
+            return {};
+        }
+        const auto digest = finalDigest();
+        const auto result =
+            sign(digest, digestName(_signature.digest), saltLength(), _signature.scheme == SignatureScheme::RSA_PSS);
+        clearOperation();
+        return result.toByteArray();
+    }
+    bool endVerify(const QByteArray &signature) override
+    {
+        if (_operation != Operation::Verify || signature.size() != (bits() + 7) / 8) {
+            clearOperation();
+            return false;
+        }
+        const auto digest = finalDigest();
+        if (_signature.digest == SignatureDigest::None && digest.isEmpty()) {
+            // NCrypt's raw signature API rejects zero bytes. Compare the
+            // standard empty type-1 block using the native public primitive.
+            SecureArray block((bits() + 7) / 8);
+            DWORD       written = 0;
+            const bool  ok      = NCryptEncrypt(_key->value,
+                                                reinterpret_cast<PBYTE>(const_cast<char *>(signature.constData())),
+                                                DWORD(signature.size()),
+                                                nullptr,
+                                                reinterpret_cast<PBYTE>(block.data()),
+                                                DWORD(block.size()),
+                                                &written,
+                                                NCRYPT_NO_PADDING_FLAG | NCRYPT_SILENT_FLAG) == ERROR_SUCCESS &&
+                written == DWORD(block.size());
+            const auto expected   = emptySignatureBlock(block.size());
+            unsigned   difference = 0;
+            for (int i = 0; i < block.size(); ++i)
+                difference |= uchar(block[i]) ^ uchar(expected[i]);
+            clearOperation();
+            return ok && !difference;
+        }
+        BCRYPT_PKCS1_PADDING_INFO pkcs {digestName(_signature.digest)};
+        BCRYPT_PSS_PADDING_INFO   pss {digestName(_signature.digest), DWORD(saltLength())};
+        const bool                usePss = _signature.scheme == SignatureScheme::RSA_PSS;
+        const auto                status =
+            NCryptVerifySignature(_key->value,
+                                  usePss ? static_cast<void *>(&pss) : &pkcs,
+                                  mutableBytes(digest),
+                                  DWORD(digest.size()),
+                                  reinterpret_cast<PBYTE>(const_cast<char *>(signature.constData())),
+                                  DWORD(signature.size()),
+                                  (usePss ? NCRYPT_PAD_PSS_FLAG : NCRYPT_PAD_PKCS1_FLAG) | NCRYPT_SILENT_FLAG);
+        clearOperation();
+        return status == ERROR_SUCCESS;
+    }
+    bool setParts(const RsaParts &parts, bool privateKey)
+    {
+        clearKey();
+        _key    = importParts(parts, privateKey);
+        _public = !privateKey;
+        return bool(_key);
+    }
+    NCRYPT_KEY_HANDLE nativeHandle() const
+    {
+        return _key ? _key->value : 0;
     }
     NCRYPT_KEY_HANDLE handle() const
     {
@@ -160,45 +575,178 @@ public:
     }
 
 private:
+    static PBYTE mutableBytes(const SecureArray &value)
+    {
+        // Some native entry points require a valid address for an empty input.
+        static BYTE empty = 0;
+        return value.isEmpty() ? &empty : reinterpret_cast<PBYTE>(const_cast<char *>(value.constData()));
+    }
+    static LPCWSTR digestName(SignatureDigest digest)
+    {
+        switch (digest) {
+        case SignatureDigest::MD5:
+            return BCRYPT_MD5_ALGORITHM;
+        case SignatureDigest::SHA1:
+            return BCRYPT_SHA1_ALGORITHM;
+        case SignatureDigest::SHA256:
+            return BCRYPT_SHA256_ALGORITHM;
+        case SignatureDigest::SHA384:
+            return BCRYPT_SHA384_ALGORITHM;
+        case SignatureDigest::SHA512:
+            return BCRYPT_SHA512_ALGORITHM;
+        default:
+            return nullptr;
+        }
+    }
+    static QString hashName(SignatureDigest digest)
+    {
+        switch (digest) {
+        case SignatureDigest::MD5:
+            return QStringLiteral("md5");
+        case SignatureDigest::SHA1:
+            return QStringLiteral("sha1");
+        case SignatureDigest::SHA256:
+            return QStringLiteral("sha256");
+        case SignatureDigest::SHA384:
+            return QStringLiteral("sha384");
+        case SignatureDigest::SHA512:
+            return QStringLiteral("sha512");
+        default:
+            return {};
+        }
+    }
+    static int digestLength(SignatureDigest digest)
+    {
+        switch (digest) {
+        case SignatureDigest::MD5:
+            return 16;
+        case SignatureDigest::SHA1:
+            return 20;
+        case SignatureDigest::SHA256:
+            return 32;
+        case SignatureDigest::SHA384:
+            return 48;
+        case SignatureDigest::SHA512:
+            return 64;
+        default:
+            return 0;
+        }
+    }
+    int saltLength() const
+    {
+        return _signature.saltLength < 0 ? digestLength(_signature.digest) : _signature.saltLength;
+    }
+    void start(SignatureAlgorithm algorithm, Operation operation)
+    {
+        clearOperation();
+        if (!_key || (operation == Operation::Sign && !isPrivate()) ||
+            (algorithm.scheme != SignatureScheme::RSA_PKCS1v15 && algorithm.scheme != SignatureScheme::RSA_PSS))
+            return;
+        if (algorithm.digest != SignatureDigest::None && !digestName(algorithm.digest))
+            return;
+        if (algorithm.scheme == SignatureScheme::RSA_PKCS1v15 &&
+            (algorithm.mgfDigest != SignatureDigest::Unknown || algorithm.saltLength != -1 ||
+             algorithm.trailerField != -1))
+            return;
+        if (algorithm.scheme == SignatureScheme::RSA_PSS &&
+            (algorithm.digest == SignatureDigest::None || algorithm.digest == SignatureDigest::MD5 ||
+             algorithm.saltLength < -1 || (algorithm.trailerField != -1 && algorithm.trailerField != 1) ||
+             (algorithm.mgfDigest != SignatureDigest::Unknown && algorithm.mgfDigest != algorithm.digest)))
+            return;
+        _signature = algorithm;
+        if (algorithm.digest != SignatureDigest::None) {
+            const auto name = hashName(algorithm.digest);
+            if (!isSupported(QStringList {name}, provider()->name()))
+                return;
+            _hash = std::make_unique<Hash>(name, provider()->name());
+        }
+        if (algorithm.scheme == SignatureScheme::RSA_PSS &&
+            saltLength() > (bits() + 6) / 8 - digestLength(algorithm.digest) - 2) {
+            clearOperation();
+            return;
+        }
+        _operation = operation;
+    }
+    SecureArray finalDigest()
+    {
+        return _hash ? SecureArray(_hash->final())
+                     : copyBytes(reinterpret_cast<const char *>(_raw.data()), int(_raw.size()));
+    }
+    SecureArray sign(const SecureArray &digest, LPCWSTR algorithm, int salt, bool pss) const
+    {
+        if (!isPrivate())
+            return {};
+        if (!pss && !algorithm && digest.isEmpty()) {
+            const auto  block = emptySignatureBlock((bits() + 7) / 8);
+            SecureArray output(block.size());
+            DWORD       written = 0;
+            if (NCryptDecrypt(_key->value,
+                              mutableBytes(block),
+                              DWORD(block.size()),
+                              nullptr,
+                              reinterpret_cast<PBYTE>(output.data()),
+                              DWORD(output.size()),
+                              &written,
+                              NCRYPT_NO_PADDING_FLAG | NCRYPT_SILENT_FLAG) != ERROR_SUCCESS ||
+                written != DWORD(output.size()))
+                return {};
+            return output;
+        }
+        BCRYPT_PKCS1_PADDING_INFO pkcs {algorithm};
+        BCRYPT_PSS_PADDING_INFO   padding {algorithm, DWORD(salt)};
+        SecureArray               output((bits() + 7) / 8);
+        DWORD                     written = 0;
+        if (NCryptSignHash(_key->value,
+                           pss ? static_cast<void *>(&padding) : &pkcs,
+                           mutableBytes(digest),
+                           DWORD(digest.size()),
+                           reinterpret_cast<PBYTE>(output.data()),
+                           DWORD(output.size()),
+                           &written,
+                           (pss ? NCRYPT_PAD_PSS_FLAG : NCRYPT_PAD_PKCS1_FLAG) | NCRYPT_SILENT_FLAG) != ERROR_SUCCESS ||
+            written != DWORD(output.size()))
+            return {};
+        return output;
+    }
+    static SecureArray emptySignatureBlock(int size)
+    {
+        SecureArray block(size, char(0xff));
+        block[0]        = 0;
+        block[1]        = 1;
+        block[size - 1] = 0;
+        return block;
+    }
+    void clearOperation()
+    {
+        _hash.reset();
+        secureWipe(_raw);
+        _operation = Operation::Idle;
+    }
     void clearKey()
     {
         if (_worker.joinable())
             _worker.join();
         _key.reset();
-        _public     = false;
-        _publicBits = 0;
-        _publicN    = BigInteger();
-        _publicE    = BigInteger();
+        _public = false;
+        clearOperation();
     }
-    BigInteger component(bool exponent) const
+    BigInteger component(int index) const
     {
-        if (!_key)
+        if (!_key || (index >= 2 && !isPrivate()))
             return {};
-        DWORD size = 0;
-        if (NCryptExportKey(_key->value, 0, BCRYPT_RSAPUBLIC_BLOB, nullptr, nullptr, 0, &size, 0) != ERROR_SUCCESS ||
-            size < sizeof(BCRYPT_RSAKEY_BLOB) || size > 16384)
+        RsaParts parts;
+        if (!nativeParts(_key->value, index >= 2, &parts))
             return {};
-        SecureArray blob {int(size)};
-        if (NCryptExportKey(
-                _key->value, 0, BCRYPT_RSAPUBLIC_BLOB, nullptr, reinterpret_cast<PBYTE>(blob.data()), size, &size, 0) !=
-            ERROR_SUCCESS)
-            return {};
-        BCRYPT_RSAKEY_BLOB header;
-        std::memcpy(&header, blob.constData(), sizeof(header));
-        if (header.cbPublicExp > size - sizeof(header) || header.cbModulus > size - sizeof(header) - header.cbPublicExp)
-            return {};
-        const auto  length = exponent ? header.cbPublicExp : header.cbModulus;
-        const auto  offset = sizeof(header) + (exponent ? 0 : header.cbPublicExp);
-        SecureArray positive(int(length) + 1);
-        positive[0] = 0;
-        std::memcpy(positive.data() + 1, blob.constData() + offset, length);
-        return BigInteger(positive);
+        const SecureArray *components[] {&parts.n, &parts.e, &parts.p, &parts.q, &parts.d};
+        return positiveInteger(*components[index]);
     }
     std::shared_ptr<NativeKey> _key;
-    bool                       _public     = false;
-    int                        _publicBits = 0;
-    BigInteger                 _publicN, _publicE;
+    bool                       _public = false;
     std::thread                _worker;
+    std::unique_ptr<Hash>      _hash;
+    Bytes                      _raw;
+    SignatureAlgorithm         _signature;
+    Operation                  _operation = Operation::Idle;
 };
 
 class WinPKey : public PKeyContext
@@ -223,11 +771,11 @@ public:
     }
     QList<PKey::Type> supportedIOTypes() const override
     {
-        return {};
+        return {PKey::RSA};
     }
     QList<PBEAlgorithm> supportedPBEAlgorithms() const override
     {
-        return {};
+        return {PBES2_TripleDES_SHA1, PBES2_AES128_SHA1, PBES2_AES192_SHA1, PBES2_AES256_SHA1};
     }
     PKeyBase *key() override
     {
@@ -243,14 +791,94 @@ public:
     }
     bool importKey(const PKeyBase *key) override
     {
-        const auto *native = dynamic_cast<const WinRSA *>(key);
-        if (!native)
+        if (key && key == _key.get())
+            return !key->isNull();
+        _key.reset();
+        if (!key || key->isNull() || key->type() != PKey::RSA || !key->canExport())
             return false;
-        _key.reset(static_cast<PKeyBase *>(native->clone()));
+        const auto *native = dynamic_cast<const WinRSA *>(key);
+        if (native)
+            _key.reset(static_cast<PKeyBase *>(native->clone()));
+        else {
+            const auto *rsa = dynamic_cast<const RSAContext *>(key);
+            if (!rsa)
+                return false;
+            auto result = std::make_unique<WinRSA>(provider());
+            if (rsa->isPrivate())
+                result->createPrivate(rsa->n(), rsa->e(), rsa->p(), rsa->q(), rsa->d());
+            else
+                result->createPublic(rsa->n(), rsa->e());
+            _key = std::move(result);
+        }
         return !_key->isNull();
+    }
+    QByteArray publicToDER() const override
+    {
+        return publicDER().toByteArray();
+    }
+    QString publicToPEM() const override
+    {
+        return encodeKeyPEM(publicDER(), QStringLiteral("PUBLIC KEY"));
+    }
+    ConvertResult publicFromDER(const QByteArray &der) override
+    {
+        _key.reset();
+        RsaParts parts;
+        return decodePublicRSA(MemoryRegion(der), &parts) && install(parts, false) ? ConvertGood : ErrorDecode;
+    }
+    ConvertResult publicFromPEM(const QString &pem) override
+    {
+        _key.reset();
+        RsaParts    parts;
+        SecureArray der;
+        return decodeKeyPEM(pem, false, &der) && decodePublicRSA(der, &parts) && install(parts, false) ? ConvertGood
+                                                                                                       : ErrorDecode;
+    }
+    SecureArray privateToDER(const SecureArray &passphrase, PBEAlgorithm algorithm) const override
+    {
+        const auto *native = dynamic_cast<const WinRSA *>(_key.get());
+        if (!native || !native->isPrivate())
+            return {};
+        return protectPrivateRSA(
+            exportNative(native->handle(), NCRYPT_PKCS8_PRIVATE_KEY_BLOB), passphrase, algorithm, provider()->name());
+    }
+    QString privateToPEM(const SecureArray &passphrase, PBEAlgorithm algorithm) const override
+    {
+        return encodeKeyPEM(privateToDER(passphrase, algorithm),
+                            passphrase.isEmpty() ? QStringLiteral("PRIVATE KEY")
+                                                 : QStringLiteral("ENCRYPTED PRIVATE KEY"));
+    }
+    ConvertResult privateFromDER(const SecureArray &der, const SecureArray &passphrase) override
+    {
+        _key.reset();
+        RsaParts   parts;
+        const auto result = decodePrivateRSA(der, passphrase, provider()->name(), &parts);
+        if (result != ConvertGood)
+            return result;
+        return install(parts, true) ? ConvertGood : ErrorDecode;
+    }
+    ConvertResult privateFromPEM(const QString &pem, const SecureArray &passphrase) override
+    {
+        _key.reset();
+        SecureArray der;
+        return decodeKeyPEM(pem, true, &der) ? privateFromDER(der, passphrase) : ErrorDecode;
     }
 
 private:
+    SecureArray publicDER() const
+    {
+        const auto *native = dynamic_cast<const WinRSA *>(_key.get());
+        RsaParts    parts;
+        return native && nativeParts(native->nativeHandle(), false, &parts) ? encodePublicRSA(parts) : SecureArray();
+    }
+    bool install(const RsaParts &parts, bool privateKey)
+    {
+        auto key = std::make_unique<WinRSA>(provider());
+        if (!key->setParts(parts, privateKey))
+            return false;
+        _key = std::move(key);
+        return true;
+    }
     std::unique_ptr<PKeyBase> _key;
 };
 

@@ -6,6 +6,9 @@
 #include <cstring>
 #include <memory>
 #include <openssl/err.h>
+#include <openssl/pem.h>
+#include <openssl/pkcs12.h>
+#include <openssl/rsa.h>
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
 #ifdef QT_STATICPLUGIN
@@ -82,6 +85,20 @@ struct PacketMethod
         BIO_meth_free(value);
     }
 };
+int password(char *out, int size, int, void *arg)
+{
+    const auto &pass = *static_cast<QByteArray *>(arg);
+    if (pass.size() > size)
+        return 0;
+    std::memcpy(out, pass.constData(), std::size_t(pass.size()));
+    return int(pass.size());
+}
+QByteArray bioBytes(BIO *bio)
+{
+    char      *bytes = nullptr;
+    const auto size  = BIO_get_mem_data(bio, &bytes);
+    return size > 0 && size < 65536 ? QByteArray(bytes, int(size)) : QByteArray();
+}
 }
 class WinCryptoOpenSSLTest : public QObject
 {
@@ -89,14 +106,214 @@ class WinCryptoOpenSSLTest : public QObject
 private Q_SLOTS:
     void initTestCase()
     {
-        qInfo() << "Independent DTLS peer:" << OpenSSL_version(OPENSSL_VERSION);
+        qInfo() << "Independent crypto peer:" << OpenSSL_version(OPENSSL_VERSION);
     }
     void interoperability_data();
     void interoperability();
+    void rsaOperations();
+    void rsaSerialization();
 
 private:
     QCA::Initializer _qca;
 };
+void WinCryptoOpenSSLTest::rsaOperations()
+{
+    auto native = QCA::KeyGenerator().createRSA(2048, 65537, Provider);
+    QVERIFY(!native.isNull());
+    QCOMPARE(native.provider()->name(), Provider);
+    auto        publicKey = native.toPublicKey();
+    const auto  exported  = native.toDER();
+    const auto *data      = reinterpret_cast<const unsigned char *>(exported.constData());
+    auto key = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>(d2i_AutoPrivateKey(nullptr, &data, exported.size()),
+                                                                   EVP_PKEY_free);
+    QVERIFY(key);
+    QCOMPARE(data, reinterpret_cast<const unsigned char *>(exported.constData() + exported.size()));
+    for (auto algorithm : {QCA::EME_PKCS1v15, QCA::EME_PKCS1_OAEP, QCA::EME_NO_PADDING}) {
+        const int padding = algorithm == QCA::EME_PKCS1v15 ? RSA_PKCS1_PADDING
+            : algorithm == QCA::EME_PKCS1_OAEP             ? RSA_PKCS1_OAEP_PADDING
+                                                           : RSA_NO_PADDING;
+        for (int length : {0, 42, publicKey.maximumEncryptSize(algorithm)}) {
+            QByteArray plain(length, 'p');
+            if (algorithm == QCA::EME_NO_PADDING) {
+                plain      = QByteArray(256, 0);
+                plain[255] = 3;
+            }
+            auto ctx = std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)>(EVP_PKEY_CTX_new(key.get(), nullptr),
+                                                                                   EVP_PKEY_CTX_free);
+            QVERIFY(ctx);
+            QVERIFY(EVP_PKEY_encrypt_init(ctx.get()) > 0);
+            QVERIFY(EVP_PKEY_CTX_set_rsa_padding(ctx.get(), padding) > 0);
+            QByteArray  encrypted(256, 0);
+            std::size_t size = encrypted.size();
+            QVERIFY(EVP_PKEY_encrypt(ctx.get(),
+                                     reinterpret_cast<unsigned char *>(encrypted.data()),
+                                     &size,
+                                     reinterpret_cast<const unsigned char *>(plain.constData()),
+                                     std::size_t(plain.size())) > 0);
+            QCA::SecureArray decrypted;
+            QVERIFY(native.decrypt(QCA::SecureArray(encrypted), &decrypted, algorithm));
+            QCOMPARE(decrypted.toByteArray(), plain);
+            const auto nativeEncrypted = publicKey.encrypt(QCA::SecureArray(plain), algorithm);
+            QCOMPARE(nativeEncrypted.size(), 256);
+            QVERIFY(EVP_PKEY_decrypt_init(ctx.get()) > 0);
+            QVERIFY(EVP_PKEY_CTX_set_rsa_padding(ctx.get(), padding) > 0);
+            QByteArray result(256, 0);
+            size = result.size();
+            QVERIFY(EVP_PKEY_decrypt(ctx.get(),
+                                     reinterpret_cast<unsigned char *>(result.data()),
+                                     &size,
+                                     reinterpret_cast<const unsigned char *>(nativeEncrypted.constData()),
+                                     nativeEncrypted.size()) > 0);
+            result.resize(int(size));
+            QCOMPARE(result, plain);
+        }
+    }
+    for (bool pss : {false, true})
+        for (const auto digest : {QCA::SignatureDigest::SHA1,
+                                  QCA::SignatureDigest::SHA256,
+                                  QCA::SignatureDigest::SHA384,
+                                  QCA::SignatureDigest::SHA512})
+            for (int salt : {0, 32}) {
+                const auto                   *md = digest == QCA::SignatureDigest::SHA1 ? EVP_sha1()
+                    : digest == QCA::SignatureDigest::SHA256                            ? EVP_sha256()
+                    : digest == QCA::SignatureDigest::SHA384                            ? EVP_sha384()
+                                                                                        : EVP_sha512();
+                const QCA::SignatureAlgorithm algorithm {pss ? QCA::SignatureScheme::RSA_PSS
+                                                             : QCA::SignatureScheme::RSA_PKCS1v15,
+                                                         digest,
+                                                         pss ? digest : QCA::SignatureDigest::Unknown,
+                                                         pss ? salt : -1,
+                                                         pss ? 1 : -1};
+                const QByteArray              message(1024 * 1024 + 17, 'm');
+                const auto                    signature = native.signMessage(QCA::SecureArray(message), algorithm);
+                QCOMPARE(signature.size(), 256);
+                auto ctx = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>(EVP_MD_CTX_new(), EVP_MD_CTX_free);
+                QVERIFY(ctx);
+                EVP_PKEY_CTX *pkey = nullptr;
+                QVERIFY(EVP_DigestVerifyInit(ctx.get(), &pkey, md, nullptr, key.get()) > 0);
+                if (pss) {
+                    QVERIFY(EVP_PKEY_CTX_set_rsa_padding(pkey, RSA_PKCS1_PSS_PADDING) > 0);
+                    QVERIFY(EVP_PKEY_CTX_set_rsa_pss_saltlen(pkey, salt) > 0);
+                }
+                QVERIFY(EVP_DigestVerify(ctx.get(),
+                                         reinterpret_cast<const unsigned char *>(signature.constData()),
+                                         signature.size(),
+                                         reinterpret_cast<const unsigned char *>(message.constData()),
+                                         message.size()) == 1);
+                QVERIFY(EVP_DigestSignInit(ctx.get(), &pkey, md, nullptr, key.get()) > 0);
+                if (pss) {
+                    QVERIFY(EVP_PKEY_CTX_set_rsa_padding(pkey, RSA_PKCS1_PSS_PADDING) > 0);
+                    QVERIFY(EVP_PKEY_CTX_set_rsa_pss_saltlen(pkey, salt) > 0);
+                }
+                QByteArray  peerSignature(256, 0);
+                std::size_t size = peerSignature.size();
+                QVERIFY(EVP_DigestSign(ctx.get(),
+                                       reinterpret_cast<unsigned char *>(peerSignature.data()),
+                                       &size,
+                                       reinterpret_cast<const unsigned char *>(message.constData()),
+                                       message.size()) > 0);
+                peerSignature.resize(int(size));
+                QVERIFY(publicKey.verifyMessage(QCA::SecureArray(message), peerSignature, algorithm));
+            }
+    for (const QByteArray plain : {QByteArray(), QByteArray("raw recovery")}) {
+        const auto signature = native.signMessage(QCA::SecureArray(plain), QCA::EMSA3_Raw);
+        auto ctx = std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)>(EVP_PKEY_CTX_new(key.get(), nullptr),
+                                                                               EVP_PKEY_CTX_free);
+        QVERIFY(ctx);
+        // Check the complete raw PKCS#1 block with the peer's public primitive.
+        // This includes the zero-length case rejected by newer verify-recover APIs.
+        QVERIFY(EVP_PKEY_encrypt_init(ctx.get()) > 0);
+        QVERIFY(EVP_PKEY_CTX_set_rsa_padding(ctx.get(), RSA_NO_PADDING) > 0);
+        QByteArray  recovered(256, 0);
+        std::size_t size = recovered.size();
+        QVERIFY2(EVP_PKEY_encrypt(ctx.get(),
+                                  reinterpret_cast<unsigned char *>(recovered.data()),
+                                  &size,
+                                  reinterpret_cast<const unsigned char *>(signature.constData()),
+                                  signature.size()) > 0,
+                 ERR_error_string(ERR_peek_last_error(), nullptr));
+        recovered.resize(int(size));
+        QByteArray expected(256 - plain.size() - 1, char(0xff));
+        expected[0] = 0;
+        expected[1] = 1;
+        expected += char(0);
+        expected += plain;
+        QCOMPARE(recovered, expected);
+    }
+}
+void WinCryptoOpenSSLTest::rsaSerialization()
+{
+    auto ctx = std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)>(EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr),
+                                                                           EVP_PKEY_CTX_free);
+    QVERIFY(ctx);
+    QVERIFY(EVP_PKEY_keygen_init(ctx.get()) > 0);
+    QVERIFY(EVP_PKEY_CTX_set_rsa_keygen_bits(ctx.get(), 2048) > 0);
+    EVP_PKEY *generated = nullptr;
+    QVERIFY(EVP_PKEY_keygen(ctx.get(), &generated) > 0);
+    auto key = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>(generated, EVP_PKEY_free);
+    auto bio = std::unique_ptr<BIO, decltype(&BIO_free)>(BIO_new(BIO_s_mem()), BIO_free);
+    QVERIFY(bio);
+    QVERIFY(i2d_PrivateKey_bio(bio.get(), key.get()) > 0);
+    QCA::ConvertResult result;
+    auto               native = QCA::PrivateKey::fromDER(QCA::SecureArray(bioBytes(bio.get())), {}, &result, Provider);
+    QCOMPARE(result, QCA::ConvertGood);
+    QCOMPARE(native.provider()->name(), Provider);
+    QVERIFY(BIO_reset(bio.get()) > 0);
+    QVERIFY(i2d_PUBKEY_bio(bio.get(), key.get()) > 0);
+    QCOMPARE(QCA::PublicKey::fromDER(bioBytes(bio.get()), &result, Provider).toDER(), native.toPublicKey().toDER());
+    QCOMPARE(result, QCA::ConvertGood);
+    // Include embedded NUL and a non-ASCII byte in a binary passphrase.
+    QByteArray pass("binary\0password\xff", 16);
+    for (const auto *cipher : {EVP_des_ede3_cbc(), EVP_aes_128_cbc(), EVP_aes_192_cbc(), EVP_aes_256_cbc()}) {
+        QVERIFY(BIO_reset(bio.get()) > 0);
+        // OpenSSL's current PBES2 default PRF is HMAC-SHA-256.
+        QVERIFY(i2d_PKCS8PrivateKey_bio(bio.get(), key.get(), cipher, pass.data(), int(pass.size()), nullptr, nullptr) >
+                0);
+        auto imported =
+            QCA::PrivateKey::fromDER(QCA::SecureArray(bioBytes(bio.get())), QCA::SecureArray(pass), &result, Provider);
+        QCOMPARE(result, QCA::ConvertGood);
+        QCOMPARE(imported.toPublicKey().toDER(), native.toPublicKey().toDER());
+    }
+    for (int prf : {NID_hmacWithSHA1, NID_hmacWithSHA256, NID_hmacWithSHA384, NID_hmacWithSHA512}) {
+        auto info = std::unique_ptr<PKCS8_PRIV_KEY_INFO, decltype(&PKCS8_PRIV_KEY_INFO_free)>(EVP_PKEY2PKCS8(key.get()),
+                                                                                              PKCS8_PRIV_KEY_INFO_free);
+        QVERIFY(info);
+        auto algorithm = std::unique_ptr<X509_ALGOR, decltype(&X509_ALGOR_free)>(
+            PKCS5_pbe2_set_iv(EVP_aes_256_cbc(), 4096, nullptr, 16, nullptr, prf), X509_ALGOR_free);
+        QVERIFY(algorithm);
+        auto encrypted = std::unique_ptr<X509_SIG, decltype(&X509_SIG_free)>(
+            PKCS8_set0_pbe(pass.constData(), int(pass.size()), info.get(), algorithm.get()), X509_SIG_free);
+        QVERIFY(encrypted);
+        algorithm.release(); // Ownership transfers on success; info remains caller-owned.
+        QVERIFY(BIO_reset(bio.get()) > 0);
+        QVERIFY(i2d_PKCS8_bio(bio.get(), encrypted.get()) > 0);
+        auto imported =
+            QCA::PrivateKey::fromDER(QCA::SecureArray(bioBytes(bio.get())), QCA::SecureArray(pass), &result, Provider);
+        QCOMPARE(result, QCA::ConvertGood);
+        QCOMPARE(imported.toPublicKey().toDER(), native.toPublicKey().toDER());
+    }
+    for (const auto algorithm :
+         {QCA::PBEDefault, QCA::PBES2_AES128_SHA1, QCA::PBES2_AES192_SHA1, QCA::PBES2_AES256_SHA1}) {
+        const auto encrypted = native.toDER(QCA::SecureArray(pass), algorithm);
+        QVERIFY(!encrypted.isEmpty());
+        auto input = std::unique_ptr<BIO, decltype(&BIO_free)>(BIO_new_mem_buf(encrypted.constData(), encrypted.size()),
+                                                               BIO_free);
+        auto imported = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>(
+            d2i_PKCS8PrivateKey_bio(input.get(), nullptr, password, &pass), EVP_PKEY_free);
+        QVERIFY(imported);
+        const QCA::SecureArray message("peer imported key");
+        const auto             signature = native.signMessage(message, QCA::EMSA3_SHA256);
+        auto verify = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>(EVP_MD_CTX_new(), EVP_MD_CTX_free);
+        QVERIFY(verify);
+        QVERIFY(EVP_DigestVerifyInit(verify.get(), nullptr, EVP_sha256(), nullptr, imported.get()) > 0);
+        QCOMPARE(EVP_DigestVerify(verify.get(),
+                                  reinterpret_cast<const unsigned char *>(signature.constData()),
+                                  signature.size(),
+                                  reinterpret_cast<const unsigned char *>(message.constData()),
+                                  message.size()),
+                 1);
+    }
+}
 void WinCryptoOpenSSLTest::interoperability_data()
 {
     QTest::addColumn<bool>("nativeServer");

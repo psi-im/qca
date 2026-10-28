@@ -179,6 +179,8 @@ jobs:
         shared: ["ON", "OFF"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - id: qt
         uses: ./.github/actions/load-dependency-lock
       - uses: jurplel/install-qt-action@v4
