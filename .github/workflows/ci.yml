@@ -218,6 +218,7 @@ jobs:
         shell: msys2 {0}
         run: |
           set -euo pipefail
+          trap 'echo "::error::Line $LINENO failed: $BASH_COMMAND"' ERR
           cmake --build build --parallel 2
           ctest --test-dir build --output-on-failure
           # The tests run every algorithm on every loaded provider, where
@@ -252,9 +253,11 @@ jobs:
             # the API where the raw log may not be.
             details="$(grep -E 'FAIL!|Loc:|Actual|Expected|NONE of the providers supports|^Totals' <<< "$out" | head -n 80 || true)"
             [ -n "$details" ] || details="$(tail -n 40 <<< "$out")"
+            details="$problem"$'\n'"$details"
             details="${details//'%'/'%25'}"
             details="${details//$'\n'/'%0A'}"
-            echo "::error title=$test with qca-wincrypto alone: $problem::$details"
+            # The title is a property: no ':' or ',' in it.
+            echo "::error title=$test with qca-wincrypto alone::$details"
           done
           unset QCA_PLUGIN_PATH
           test "$failed" = 0
