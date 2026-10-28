@@ -468,6 +468,17 @@ void CipherUnitTest::aes128_gcm_data()
                           << QStringLiteral("56341f2b431d3b0dbad787db003f2215")
                           << QStringLiteral("bfcd3a7252f7f199bf788df8cf61032a");
 
+    // NIST GCM test case 3: the usual 96-bit IV, without additional data.
+    QTest::newRow("nist-tc3") << QStringLiteral(
+                                     "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a72"
+                                     "1c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b391aafd255")
+                              << QStringLiteral(
+                                     "42831ec2217774244b7221b784d0d49ce3aa212f2c02a4e035c17e2329aca12e"
+                                     "21d514b25466931c7d8f6a5aac84aa051ba30b396a0aac973d58e091473f5985")
+                              << QStringLiteral("4d5c2af327cd64a62cf35abd2ba6fab4")
+                              << QStringLiteral("feffe9928665731c6d6a8f9467308308")
+                              << QStringLiteral("cafebabefacedbaddecaf888");
+
     QTest::newRow("wrongtag") << QStringLiteral("6f6820526f6d656d6f21") << QStringLiteral("a9f2558b9a74e6fc551f")
                               << QStringLiteral("f8ebf75f108c6f74e6fe49035d268d44")
                               << QStringLiteral("1f491f8ddf4856ae4bff9039d418175a")

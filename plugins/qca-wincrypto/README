@@ -1,24 +1,49 @@
-QCA Windows Cryptography plugin
--------------------------------
-Date: June 11th, 2008
-Website: http://delta.affinix.com/qca/
-Mailing List: Delta Project <delta@lists.affinix.com>
+QCA Windows CNG plugin
+----------------------
 
-Author: Michael Leupold <lemma@confuego.org>
+qca-wincrypto provides QCA algorithms through Windows Cryptography API:
+Next Generation (CNG, bcrypt.dll). It needs no third-party libraries and
+is built only on Windows. Windows 10 or later is the supported target;
+the plugin uses only CNG functions that exist since Windows 7.
 
-This plugin might at some point provide the means to support the
-Windows Cryptographic API. Currently it only supports generating
-random numbers using the CryptGenRandom call.
+Provider name: qca-wincrypto
 
-This plugin should load on any version of Windows, but it will
-only generate random numbers on Windows 2000 or later.
+Features
+--------
 
-Installing
-----------
+  random                          BCryptGenRandom, system-preferred RNG
+  md5 sha1 sha256 sha384 sha512   CNG hashes
+  sha3_256 sha3_384 sha3_512      only where CNG has SHA-3 (Windows 11
+                                  24H2 and later); detected at run time
+  hmac(md5) hmac(sha1) hmac(sha256) hmac(sha384) hmac(sha512)
+  pbkdf2(sha1) pbkdf2(sha256) pbkdf2(sha512)
+                                  BCryptDeriveKeyPBKDF2
+  hkdf(sha256)                    RFC 5869 on top of CNG HMAC
+  aes128-* aes192-* aes256-*      modes ecb, cbc, cbc-pkcs7, cfb, ofb,
+                                  ctr, gcm
 
-For Windows:
+The AES block function is CNG's. The modes of operation are implemented in
+aesmodes.cpp on top of CNG AES-ECB, because CNG's own chaining modes cannot
+serve QCA's cipher API: CNG has no OFB or CTR, its CFB takes only whole
+blocks, and its GCM takes only 96-bit nonces and whole blocks between
+calls. The modes follow QCA's OpenSSL provider: CFB with 128-bit feedback,
+CTR with a 128-bit big-endian counter, GCM with any IV length and a tag of
+up to 16 bytes. GCM decryption releases no plaintext before the tag has
+been verified at final(). aesmodes.cpp has no Windows dependency, so it
+can be checked against other implementations on any platform.
 
-  configwin rd
-  qmake
-  nmake (or make)
-  copy lib\*.dll qtdir\plugins\crypto
+Not provided: public-key algorithms (RSA, DSA, DH, EC, Ed25519), X.509,
+CMS and TLS. CNG has no EdDSA at all, so Ed25519 stays with qca-ossl.
+
+Building
+--------
+
+Enable the plugin like any other:
+
+  cmake -DBUILD_PLUGINS="ossl;wincrypto" ...
+
+or -DWITH_wincrypto_PLUGIN=yes. With BUILD_PLUGINS=auto or all it is
+built on Windows and skipped elsewhere.
+
+The unit tests run every algorithm against every loaded provider, so the
+regular ctest run on Windows covers this plugin too.

@@ -1,17 +1,24 @@
-# QCA WinCrypto
+# QCA WinCrypto: Windows CNG (bcrypt.dll)
 
-IF (WIN32)
-   SET (QCA_WINCRYPTO_SOURCES qca-wincrypto.cpp)
+if(WIN32)
+  enable_plugin("wincrypto")
 
-   ADD_LIBRARY (qca-wincrypto MODULE ${QCA_WINCRYPTO_SOURCES})
-   # use win32 includes
-   target_link_libraries(qca-wincrypto Qt${QT_MAJOR_VERSION}::Core)
-   TARGET_LINK_LIBRARIES (qca-wincrypto ${QCA_LIB_NAME})
-   TARGET_LINK_LIBRARIES (qca-wincrypto advapi32)
+  set(QCA_WINCRYPTO_SOURCES qca-wincrypto.cpp aesmodes.cpp aesmodes.h)
+  add_library(qca-wincrypto ${PLUGIN_TYPE} ${QCA_WINCRYPTO_SOURCES})
 
-   INSTALL (TARGETS qca-wincrypto
-        LIBRARY DESTINATION "${QCA_CRYPTO_INSTALL_DIR}"
-        ARCHIVE DESTINATION "${QCA_CRYPTO_INSTALL_DIR}"
-        RUNTIME DESTINATION "${QCA_CRYPTO_INSTALL_DIR}"
-   )
-ENDIF (WIN32)
+  target_compile_definitions(qca-wincrypto PRIVATE NOMINMAX)
+  target_link_libraries(qca-wincrypto Qt${QT_MAJOR_VERSION}::Core)
+  target_link_libraries(qca-wincrypto ${QCA_LIB_NAME})
+  target_link_libraries(qca-wincrypto bcrypt)
+
+  if(NOT DEVELOPER_MODE)
+    install(TARGETS qca-wincrypto
+            LIBRARY DESTINATION "${QCA_CRYPTO_INSTALL_DIR}"
+            ARCHIVE DESTINATION "${QCA_CRYPTO_INSTALL_DIR}"
+            RUNTIME DESTINATION "${QCA_CRYPTO_INSTALL_DIR}")
+
+    install_pdb(qca-wincrypto ${QCA_CRYPTO_INSTALL_DIR})
+  endif()
+else()
+  disable_plugin("wincrypto")
+endif()
