@@ -223,19 +223,41 @@ jobs:
           # The tests run every algorithm on every loaded provider, where
           # qca-ossl covers everything. Run them again with qca-wincrypto
           # alone, before the install puts plugins on QCA's default path.
+          plugin="$(find build/lib -type f -iname '*qca-wincrypto*.dll' -print -quit)"
+          test -n "$plugin" || { echo "::error::qca-wincrypto DLL not found under build/lib"; exit 1; }
           mkdir -p wincrypto-only/crypto
-          cp "$(find build/lib -type f -iname '*qca-wincrypto*.dll' -print -quit)" wincrypto-only/crypto/
+          cp "$plugin" wincrypto-only/crypto/
           export QCA_PLUGIN_PATH="$(cygpath -m "$PWD/wincrypto-only")"
+          failed=0
           for test in hashunittest kdfunittest cipherunittest; do
-            out="$(cd build/bin && "./$test.exe" 2>&1)" || { echo "$out"; exit 1; }
-            grep -E '^Totals' <<< "$out"
-            grep -q '"qca-wincrypto"' <<< "$out" || { echo "$out"; echo "$test: qca-wincrypto not loaded"; exit 1; }
-            if grep -q '"qca-ossl"' <<< "$out"; then echo "$test: qca-ossl loaded"; exit 1; fi
-            if grep -E 'NONE of the providers supports (MD5|SHA1|SHA256|SHA384|SHA512|PBKDF version 2|HKDF|AES)' <<< "$out"; then
-              exit 1
+            status=0
+            out="$(cd build/bin && "./$test.exe" 2>&1 | tr -d '\r')" || status=$?
+            problem=""
+            if [ "$status" != 0 ]; then
+              problem="exit status $status"
+            elif ! grep -q '"qca-wincrypto"' <<< "$out"; then
+              problem="qca-wincrypto not loaded"
+            elif grep -q '"qca-ossl"' <<< "$out"; then
+              problem="qca-ossl loaded too"
+            elif grep -qE 'NONE of the providers supports (MD5|SHA1|SHA256|SHA384|SHA512|PBKDF version 2|HKDF|AES)' <<< "$out"; then
+              problem="an algorithm of qca-wincrypto reported as unsupported"
             fi
+            if [ -z "$problem" ]; then
+              grep -E '^Totals' <<< "$out" || true
+              continue
+            fi
+            failed=1
+            echo "$out"
+            # One annotation per test, as annotations stay readable through
+            # the API where the raw log may not be.
+            details="$(grep -E 'FAIL!|Loc:|Actual|Expected|NONE of the providers supports|^Totals' <<< "$out" | head -n 80 || true)"
+            [ -n "$details" ] || details="$(tail -n 40 <<< "$out")"
+            details="${details//'%'/'%25'}"
+            details="${details//$'\n'/'%0A'}"
+            echo "::error title=$test with qca-wincrypto alone: $problem::$details"
           done
           unset QCA_PLUGIN_PATH
+          test "$failed" = 0
           cmake --install build
           test -f sdk/lib/cmake/Qca3-qt5/Qca3-qt5Config.cmake
           test -f sdk/include/Qca3-qt5/QtCrypto/qca_securefile.h
