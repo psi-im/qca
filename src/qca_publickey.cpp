@@ -1394,7 +1394,13 @@ RSAPublicKey::RSAPublicKey()
 RSAPublicKey::RSAPublicKey(const BigInteger &n, const BigInteger &e, const QString &provider)
 {
     RSAContext *k = static_cast<RSAContext *>(getContext(QStringLiteral("rsa"), provider));
+    if (!k)
+        return;
     k->createPublic(n, e);
+    if (k->isNull()) {
+        delete k;
+        return;
+    }
     PKeyContext *c = static_cast<PKeyContext *>(getContext(QStringLiteral("pkey"), k->provider()));
     c->setKey(k);
     change(c);
@@ -1430,7 +1436,13 @@ RSAPrivateKey::RSAPrivateKey(const BigInteger &n,
                              const QString    &provider)
 {
     RSAContext *k = static_cast<RSAContext *>(getContext(QStringLiteral("rsa"), provider));
+    if (!k)
+        return;
     k->createPrivate(n, e, p, q, d);
+    if (k->isNull()) {
+        delete k;
+        return;
+    }
     PKeyContext *c = static_cast<PKeyContext *>(getContext(QStringLiteral("pkey"), k->provider()));
     c->setKey(k);
     change(c);

@@ -1114,6 +1114,7 @@ QStringList WinCryptoProvider::features() const
         list += QStringLiteral("hmac(%1)").arg(QLatin1String(type.name));
     list += QStringLiteral("pbkdf2(sha1)");
     list += QStringLiteral("pbkdf2(sha256)");
+    list += QStringLiteral("pbkdf2(sha384)");
     list += QStringLiteral("pbkdf2(sha512)");
     list += QStringLiteral("hkdf(sha256)");
     for (int bits : aesKeyBits)
@@ -1149,6 +1150,8 @@ Provider::Context *WinCryptoProvider::createContext(const QString &type)
         return new WinCryptoPbkdf2Context(Algorithm::HmacSHA1, this, type);
     if (type == QLatin1String("pbkdf2(sha256)"))
         return new WinCryptoPbkdf2Context(Algorithm::HmacSHA256, this, type);
+    if (type == QLatin1String("pbkdf2(sha384)"))
+        return new WinCryptoPbkdf2Context(Algorithm::HmacSHA384, this, type);
     if (type == QLatin1String("pbkdf2(sha512)"))
         return new WinCryptoPbkdf2Context(Algorithm::HmacSHA512, this, type);
     if (type == QLatin1String("hkdf(sha256)"))

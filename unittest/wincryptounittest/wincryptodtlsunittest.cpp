@@ -291,6 +291,16 @@ void WinCryptoDTLSTest::identityCleanup()
     QVERIFY(!before.contains(QStringLiteral("enumeration failed")));
     for (int i = 0; i < 3; ++i) {
         Pair pair;
+        if (i == 1) {
+            QCA::ConvertResult result;
+            const auto         loaded = QCA::PrivateKey::fromDER(pair.identity.key.toDER(), {}, &result, Provider);
+            QCOMPARE(result, QCA::ConvertGood);
+            QVERIFY(!loaded.isNull());
+            QCA::CertificateChain chain;
+            chain += pair.identity.certificate;
+            pair.client.setCertificate(chain, loaded);
+            pair.server.setCertificate(chain, loaded);
+        }
         QVERIFY(pair.run());
         QCOMPARE(temporaryKeys(), before); // Removed before session teardown.
     }

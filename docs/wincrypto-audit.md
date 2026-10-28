@@ -12,29 +12,39 @@ versions and Qt 5/MinGW still require their corresponding CI/platform checks.
 | --- | --- |
 | Randomness | System-preferred `BCryptGenRandom` |
 | Hashes and MACs | MD5, SHA-1/256/384/512 and their HMAC variants; SHA-3 where provided by the running OS |
-| Derivation | PBKDF2-SHA-1/256/512 and HKDF-SHA-256 |
+| Derivation | PBKDF2-SHA-1/256/384/512 and HKDF-SHA-256 |
 | Symmetric encryption | AES-128/192/256 in ECB, CBC, CBC-PKCS7, CFB, OFB, CTR and GCM modes |
-| Certificates | DER/PEM import, properties, explicit trust validation and limited self-signed certificate creation |
+| Certificates | DER/PEM import, properties, RSA public-key extraction, explicit trust validation and limited self-signed certificate creation |
 | Stream TLS | Client TLS 1.2 and OS-supported TLS 1.3, hostname validation, channel binding and shutdown |
 | DTLS | Version 1.2, both roles, mutual certificates, MTU handling and bounded retransmission |
 | DTLS-SRTP | Four protection profiles and directional master key/salt export |
-| RSA identities | Opaque locally generated keys, 2048-8192 bits, public exponent 65537 |
+| RSA | Generation, components, PKCS#1 v1.5/OAEP/raw encryption, PKCS#1/PSS signatures and DER/PEM I/O |
 
-The RSA implementation currently provides local identity generation and the
-native certificate/credential workflow. General QCA RSA encryption, decryption,
-signing, verification, component-based construction and key import/export are
-not implemented. Private components are not exposed. Public views retain only
-N, E and the bit length without retaining a native private-key handle.
+RSA generation supports 2048-8192 bits in 64-bit steps, exponent 65537. Imports
+support 512-16384-bit two-prime keys subject to native CNG validation. Public
+views own separate public CNG handles. RSA component constructors preserve a
+null key when the provider rejects input. Hashed signatures stream without
+retaining the message; raw PKCS#1 input is limited to one block. PKCS#1 v1.5
+signatures support raw input and MD5/SHA-1/256/384/512; PSS supports the SHA
+digests, matching MGF1, trailer 1 and explicit/default digest-sized salts.
+Encryption supports v1.5, OAEP-SHA-1 and raw RSA, including empty padded input;
+the legacy private-encrypt/public-decrypt operations support v1.5 and raw.
+SSL-specific v1.5 padding and other signature descriptors fail closed.
 
-QCA's `canSign()`, `canEncrypt()`, `canDecrypt()` and `canVerify()` convenience
-methods currently infer capabilities from the key type. They do not establish
-that the corresponding operation is implemented by this partial RSA provider.
-This is an implementation/API limitation, not a limitation of Windows CNG's RSA
-algorithms. Callers must use only the documented identity operations here.
+Public export is SPKI and private export is PKCS#8; import also accepts PKCS#1.
+Encrypted PKCS#8 uses PBES2/PBKDF2 with AES-128/192/256-CBC or 3DES-CBC.
+QCA's existing default PBE selects 3DES; callers can explicitly select
+`PBES2_AES256_SHA1`. Export follows the PBE enum's SHA-1 PRF, with 1,300,000
+iterations, a random 16-byte salt and a random IV. Import supports SHA-1,
+SHA-256, SHA-384 and SHA-512 PRFs, binary passphrases, at most 10,000,000 PRF
+calls, 1024-byte salts and 1 MiB passwords. DER/PEM inputs are limited to
+64/128 KiB. Parsing rejects noncanonical DER, trailing bytes, inconsistent
+components/CRT, restricted RSA-PSS keys and multi-prime RSA. Single DES and
+traditional encrypted PEM are not supported.
 
 Stream TLS server mode and stream TLS client identities, DTLS 1.0/1.3,
-renegotiation, session import, DSA/DH/EC/Ed25519, certificate public-key extraction,
-CSR, CMS and PKCS#12 remain unsupported. Provider feature names do not imply
+renegotiation, session import, DSA/DH/EC/Ed25519, extraction of non-RSA public
+keys, CSR, CMS and PKCS#12 remain unsupported. Provider feature names do not imply
 complete parity with another backend or support for every related QCA operation.
 
 ## Sensitive memory and failure handling
@@ -50,6 +60,11 @@ HMACs no longer recreate an unused keyed context or retain an extra key
 reference; QCA supplies its saved key on the next `clear()`/`setup()`. HKDF
 intermediates stay in `SecureArray`. Temporary byte vectors use a wiping
 allocator, including when old allocations are discarded during growth.
+Private RSA DER, components, decrypted keys and PBE intermediates also stay in
+protected buffers. RSA private operations use CNG handles. The public QCA PEM
+API necessarily returns a caller-owned `QString`; its plaintext lifetime is the
+caller's responsibility. No plaintext `QByteArray`/base64 staging copy is made
+inside the provider's private-key PEM codec.
 
 Native failures are checked instead of returning a truncated digest or partial
 cipher result. Failed cipher operations become terminal. PKCS#7 verification
@@ -185,8 +200,9 @@ OpenSSL discovery explicitly disabled. The production DLL's imports contain
 QCA, Qt, Windows crypto/security libraries and the C++ runtime, without libssl
 or libcrypto.
 
-`WinCrypto`, `WinCryptoTLS` and `WinCryptoDTLS` reported 82, 15 and 15 passing
-cases respectively, including parameterized rows. All three also passed with
+`WinCrypto`, `WinCryptoTLS`, `WinCryptoDTLS` and `WinCryptoRSA` reported
+82, 15, 15 and 12 passing cases respectively, including parameterized rows.
+The suites also passed with
 MSVC AddressSanitizer. The cipher/hash/MAC/KDF suites reported 486/69/9/26 passing
 cases. The generic DTLS-SRTP suite reported 7 passed and 3 skipped; the skipped
 cases explicitly require a different provider. A separate full QCA run found
@@ -199,8 +215,10 @@ cipher/SSF constraints and temporary-key cleanup. Provider-specific tests select
 
 In a separate build, `-DWINCRYPTO_TEST_OPENSSL_INTEROP=ON` enables an independent
 OpenSSL peer; leave OpenSSL discovery enabled for that test build. It reported
-12 passed and no skips with each of OpenSSL 3.5.0 and 4.0.1, covering both DTLS
-roles, data-only traffic and exact keys/salts for all four SRTP profiles.
+14 passed and no skips with each of OpenSSL 3.5.0 and 4.0.1, covering both DTLS
+roles, data-only traffic and exact keys/salts for all four SRTP profiles, plus
+bidirectional RSA encryption, PKCS#1/PSS signatures and PKCS#8 interoperability
+with all four supported PBKDF2 PRFs.
 Only that test executable links OpenSSL. It is also enabled in the Windows
 Qt 5/MinGW CI configuration that already supplies OpenSSL.
 

@@ -354,7 +354,19 @@ public:
     }
     PKeyContext *subjectPublicKey() const override
     {
-        return nullptr;
+        if (!_cert)
+            return nullptr;
+        DWORD       size = 0;
+        const auto *info = &_cert->pCertInfo->SubjectPublicKeyInfo;
+        if (!CryptEncodeObjectEx(Encoding, X509_PUBLIC_KEY_INFO, info, 0, nullptr, nullptr, &size) || !size ||
+            size > 65536)
+            return nullptr;
+        QByteArray der(int(size), 0);
+        if (!CryptEncodeObjectEx(Encoding, X509_PUBLIC_KEY_INFO, info, 0, nullptr, der.data(), &size))
+            return nullptr;
+        der.resize(int(size));
+        auto key = std::unique_ptr<PKeyContext>(static_cast<PKeyContext *>(createPKeyContext(provider())));
+        return key->publicFromDER(der) == ConvertGood ? key.release() : nullptr;
     }
     bool isIssuerOf(const CertContext *other) const override
     {
