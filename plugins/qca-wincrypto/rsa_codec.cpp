@@ -463,7 +463,7 @@ bool decodeKeyPEM(const QString &pem, bool privateKey, SecureArray *der)
         const auto end = pem.indexOf(footer, start + header.size());
         if (end < 0)
             return false;
-        for (qsizetype i = end + footer.size(); i < pem.size(); ++i)
+        for (int i = int(end + footer.size()); i < pem.size(); ++i)
             if (!pem[i].isSpace())
                 return false;
         const int offset = start + int(header.size()), size = int(end) - offset;
