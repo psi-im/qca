@@ -1067,7 +1067,7 @@ void BaseOsslTLSContext::getCert()
 
         peercert = chain.primary();
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
         code = chain.validate(trusted);
 #else
         int ret = SSL_get_verify_result(ssl);

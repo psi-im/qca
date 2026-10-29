@@ -287,7 +287,7 @@ static void setCloseOnExec(int fd)
 
 static void enableCacheAvoidance(int fd)
 {
-#if (defined(Q_OS_MACOS) || defined(Q_OS_MAC)) && defined(F_NOCACHE)
+#if defined(Q_OS_MACOS) && defined(F_NOCACHE)
     (void)fcntl(fd, F_NOCACHE, 1);
 #else
     Q_UNUSED(fd)
