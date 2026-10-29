@@ -19,13 +19,9 @@ set(QCA_LIB_MAJOR_VERSION "${PROJECT_VERSION_MAJOR}")
 set(QCA_LIB_MINOR_VERSION "${PROJECT_VERSION_MINOR}")
 set(QCA_LIB_PATCH_VERSION "${PROJECT_VERSION_PATCH}")
 
-if(POLICY CMP0042)
-  if(CMAKE_VERSION LESS "4.0")
-    cmake_policy(SET CMP0042 OLD)
-  else()
-    cmake_policy(SET CMP0042 NEW)
-  endif()
-endif()
+# cmake_minimum_required(3.16) selects CMP0042 NEW. Keep QCA's
+# explicit no-@rpath installation preference without selecting the
+# deprecated (and CMake 4-removed) OLD policy behavior.
 set(CMAKE_MACOSX_RPATH OFF)
 
 if(ANDROID)
