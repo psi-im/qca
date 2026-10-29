@@ -65,11 +65,13 @@ do not publish partial output. PKCS#7 padding checks inspect all 16 bytes.
 
 TLS validates chains against the certificates passed to QCA; an empty
 trust collection does not inherit system trust. Applications that want
-Windows trust should pass QCA::systemStore(). Native SSL policy checks
-hostnames, and peerIdentityResult() must be accepted before exchanging
+Windows trust should pass QCA::systemStore(), which remains available
+without a CRL provider. Native SSL policy checks hostnames, and
+peerIdentityResult() must be accepted before exchanging
 application data, as with other QCA providers. Trust building is local:
-there are no synchronous AIA/root downloads. Supplied CRLs are checked;
-explicit revocation checks fail if the needed information is unavailable.
+there are no synchronous AIA/root downloads. This provider does not parse
+CRLs; CRLs imported by another provider can be checked. Explicit revocation
+checks fail if the needed information is unavailable.
 Cipher-suite/SSF constraints are enforced before handshake success.
 As documented by QCA, startClient() also accepts an empty hostname for
 callers that apply their own protocol-specific name checks. In that

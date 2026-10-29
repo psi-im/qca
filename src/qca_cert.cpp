@@ -2265,7 +2265,7 @@ CRL CRL::fromDER(const QByteArray &a, ConvertResult *result, const QString &prov
 {
     CRL           c;
     CRLContext   *cc = static_cast<CRLContext *>(getContext(QStringLiteral("crl"), provider));
-    ConvertResult r  = cc->fromDER(a);
+    ConvertResult r  = cc ? cc->fromDER(a) : ErrorDecode;
     if (result)
         *result = r;
     if (r == ConvertGood)
@@ -2279,7 +2279,7 @@ CRL CRL::fromPEM(const QString &s, ConvertResult *result, const QString &provide
 {
     CRL           c;
     CRLContext   *cc = static_cast<CRLContext *>(getContext(QStringLiteral("crl"), provider));
-    ConvertResult r  = cc->fromPEM(s);
+    ConvertResult r  = cc ? cc->fromPEM(s) : ErrorDecode;
     if (result)
         *result = r;
     if (r == ConvertGood)

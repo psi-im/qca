@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
+#include <QFile>
 #include <QSignalSpy>
+#include <QTemporaryDir>
 #include <QTest>
 #include <QUuid>
 #include <QtCrypto>
@@ -260,6 +262,9 @@ class WinCryptoTLSTest : public QObject
 {
     Q_OBJECT
 private Q_SLOTS:
+    void systemTrustWithoutCRLs();
+    void configuredTrustWithoutCRLs();
+    void unsupportedCRLImports();
     void certificates();
     void nativeIdentities();
     void clientTLS_data();
@@ -271,6 +276,85 @@ private Q_SLOTS:
 private:
     QCA::Initializer _qca;
 };
+
+void WinCryptoTLSTest::systemTrustWithoutCRLs()
+{
+    QVERIFY(QCA::isSupported("cert", ProviderName));
+    if (QCA::isSupported("crl"))
+        QSKIP("Requires a configuration without a CRL provider");
+
+    const auto store = CertOpenSystemStoreW(0, L"ROOT");
+    QVERIFY(store);
+    const auto first = CertEnumCertificatesInStore(store, nullptr);
+    QByteArray der;
+    if (first) {
+        der = QByteArray(reinterpret_cast<const char *>(first->pbCertEncoded), int(first->cbCertEncoded));
+        CertFreeCertificateContext(first);
+    }
+    CertCloseStore(store, 0);
+    if (der.isEmpty())
+        QSKIP("The Windows root certificate store is empty");
+    const auto expected = QCA::Certificate::fromDER(der, nullptr, ProviderName);
+    QVERIFY(!expected.isNull());
+    QVERIFY(QCA::haveSystemStore());
+    const auto roots = QCA::systemStore();
+    QVERIFY(roots.certificates().contains(expected));
+}
+
+void WinCryptoTLSTest::configuredTrustWithoutCRLs()
+{
+    if (QCA::isSupported("crl"))
+        QSKIP("Requires a configuration without a CRL provider");
+    NativeServer server;
+    QVERIFY(server.valid());
+    const auto certificate = QCA::Certificate::fromDER(server.der(), nullptr, ProviderName);
+    QVERIFY(!certificate.isNull());
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const auto fileName = directory.filePath(QStringLiteral("roots.pem"));
+    QFile      file(fileName);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    const auto pem =
+        certificate.toPEM().toUtf8() + QByteArray("\n-----BEGIN X509 CRL-----\nAA==\n-----END X509 CRL-----\n");
+    QCOMPARE(file.write(pem), qint64(pem.size()));
+    file.close();
+
+    struct RestoreConfig
+    {
+        QVariantMap config;
+        ~RestoreConfig()
+        {
+            QCA::setProviderConfig(QStringLiteral("default"), config);
+        }
+    } restore {QCA::getProviderConfig(QStringLiteral("default"))};
+    auto config                          = restore.config;
+    config[QStringLiteral("use_system")] = false;
+    config[QStringLiteral("roots_file")] = fileName;
+    QCA::setProviderConfig(QStringLiteral("default"), config);
+    auto stores = std::unique_ptr<QCA::KeyStoreListContext>(
+        static_cast<QCA::KeyStoreListContext *>(QCA::defaultProvider()->createContext(QStringLiteral("keystorelist"))));
+    QVERIFY(stores);
+    stores->start();
+    QVERIFY(stores->keyStores().contains(0));
+    QVERIFY(stores->entryTypes(0).contains(QCA::KeyStoreEntry::TypeCertificate));
+    QVERIFY(!stores->entryTypes(0).contains(QCA::KeyStoreEntry::TypeCRL));
+    const auto entries = stores->entryList(0);
+    const bool matches = entries.size() == 1 && entries.first()->certificate() == certificate;
+    qDeleteAll(entries);
+    QVERIFY(matches);
+}
+
+void WinCryptoTLSTest::unsupportedCRLImports()
+{
+    if (QCA::isSupported("crl"))
+        QSKIP("Requires a configuration without a CRL provider");
+    QCA::ConvertResult result = QCA::ConvertGood;
+    QVERIFY(QCA::CRL::fromDER(QByteArray(), &result, ProviderName).isNull());
+    QCOMPARE(result, QCA::ErrorDecode);
+    result = QCA::ConvertGood;
+    QVERIFY(QCA::CRL::fromPEM(QString(), &result, ProviderName).isNull());
+    QCOMPARE(result, QCA::ErrorDecode);
+}
 
 void WinCryptoTLSTest::certificates()
 {

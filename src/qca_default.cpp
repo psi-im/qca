@@ -1072,7 +1072,8 @@ public:
     QList<int> keyStores() override
     {
         if (!x509_supported) {
-            if (isSupported("cert") && isSupported("crl"))
+            // Certificate trust stores do not require a CRL implementation.
+            if (isSupported("cert"))
                 x509_supported = true;
         }
 
@@ -1111,7 +1112,8 @@ public:
     {
         QList<KeyStoreEntry::Type> list;
         list += KeyStoreEntry::TypeCertificate;
-        list += KeyStoreEntry::TypeCRL;
+        if (isSupported("crl"))
+            list += KeyStoreEntry::TypeCRL;
         return list;
     }
 
