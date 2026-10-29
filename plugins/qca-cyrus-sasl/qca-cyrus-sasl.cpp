@@ -32,6 +32,10 @@ extern "C" {
 #include <QList>
 #include <QStringList>
 
+#ifdef HAVE_SASL_CRYPTO_CALLBACKS
+#include "saslcrypto.h"
+#endif
+
 #define SASL_BUFSIZE 8192
 #define SASL_APP "qca"
 
@@ -78,6 +82,8 @@ public:
     {
         resetNeed();
         resetHave();
+        pass.clear();
+        passwordResults.clear();
         foreach (char *result, results)
             delete[] result;
         results.clear();
@@ -114,7 +120,7 @@ public:
     void setPassword(const SecureArray &s)
     {
         have.pass = true;
-        pass      = QString::fromUtf8(s.toByteArray());
+        pass      = s;
     }
 
     void setRealm(const QString &s)
@@ -189,10 +195,28 @@ public:
         results.append(p);
     }
 
-    QList<char *> results;
-    SParams       need;
-    SParams       have;
-    QString       user, authzid, pass, realm;
+    void setValue(sasl_interact_t *i, const SecureArray &s)
+    {
+        if (i->result)
+            return;
+        passwordResults.append(s);
+        i->result = passwordResults.constLast().constData();
+        i->len    = unsigned(s.size());
+    }
+
+    void clearPassword()
+    {
+        pass.clear();
+        passwordResults.clear();
+        have.pass = false;
+    }
+
+    QList<char *>      results;
+    QList<SecureArray> passwordResults;
+    SParams            need;
+    SParams            have;
+    QString            user, authzid, realm;
+    SecureArray        pass;
 };
 
 static QByteArray makeByteArray(const void *in, unsigned int len)
@@ -349,6 +373,7 @@ private:
 
     void setAuthCondition(int r)
     {
+        params.clearPassword();
         // qDebug() << "authcondition: " << r;
         SASL::AuthCondition x;
         switch (r) {
@@ -482,6 +507,7 @@ private:
             ++step;
 
             if (r == SASL_OK) {
+                params.clearPassword();
                 getssfparams();
                 result_result = Success;
                 return;
@@ -515,6 +541,7 @@ private:
             }
             out_buf = makeByteArray(clientout, clientoutlen);
             if (r == SASL_OK) {
+                params.clearPassword();
                 getssfparams();
                 result_result = Success;
                 return;
@@ -730,7 +757,7 @@ public:
             g->client_init = true;
         }
 
-        callbacks = new sasl_callback_t[5];
+        callbacks = new sasl_callback_t[6] {};
 
         callbacks[0].id      = SASL_CB_GETREALM;
         callbacks[0].proc    = nullptr;
@@ -751,6 +778,11 @@ public:
         callbacks[4].id      = SASL_CB_LIST_END;
         callbacks[4].proc    = nullptr;
         callbacks[4].context = nullptr;
+#ifdef HAVE_SASL_CRYPTO_CALLBACKS
+        callbacks[4].id   = SASL_CB_CRYPTO;
+        callbacks[4].proc = reinterpret_cast<decltype(callbacks[4].proc)>(Crypto::select);
+        callbacks[5].id   = SASL_CB_LIST_END;
+#endif
 
         result_result = Error;
 
@@ -793,7 +825,7 @@ public:
             g->server_init = true;
         }
 
-        callbacks = new sasl_callback_t[2];
+        callbacks = new sasl_callback_t[3] {};
 
         union PtrCast {
             int (*specific)(sasl_conn_t *,
@@ -817,6 +849,11 @@ public:
         callbacks[1].id      = SASL_CB_LIST_END;
         callbacks[1].proc    = nullptr;
         callbacks[1].context = nullptr;
+#ifdef HAVE_SASL_CRYPTO_CALLBACKS
+        callbacks[1].id   = SASL_CB_CRYPTO;
+        callbacks[1].proc = reinterpret_cast<decltype(callbacks[1].proc)>(Crypto::select);
+        callbacks[2].id   = SASL_CB_LIST_END;
+#endif
 
         result_result = Error;
 

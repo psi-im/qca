@@ -21,6 +21,8 @@ private Q_SLOTS:
     void cleanupTestCase();
     void scramSha256PlusClient();
     void scramSha256PlusClientAfterParams();
+    void completeClient_data();
+    void completeClient();
 
 private:
     QCA::Initializer *m_init = nullptr;
@@ -111,6 +113,114 @@ void SaslChannelBindingUnitTest::scramSha256PlusClientAfterParams()
     const QList<QVariant> arguments = startedSpy.constFirst();
     QVERIFY(arguments.at(0).toBool());
     QVERIFY(arguments.at(1).toByteArray().startsWith("p=tls-exporter,,"));
+}
+
+void SaslChannelBindingUnitTest::completeClient_data()
+{
+    QTest::addColumn<QString>("hash");
+    QTest::addColumn<QString>("mechanism");
+    QTest::addColumn<bool>("lateParams");
+    QTest::addColumn<bool>("badSignature");
+    QTest::newRow("sha1-plus") << QStringLiteral("sha1") << QStringLiteral("SCRAM-SHA-1-PLUS") << false << false;
+    QTest::newRow("sha224-plus") << QStringLiteral("sha224") << QStringLiteral("SCRAM-SHA-224-PLUS") << false << false;
+    QTest::newRow("sha256-plus") << QStringLiteral("sha256") << QStringLiteral("SCRAM-SHA-256-PLUS") << false << false;
+    QTest::newRow("sha384-plus") << QStringLiteral("sha384") << QStringLiteral("SCRAM-SHA-384-PLUS") << false << false;
+    QTest::newRow("sha512-plus") << QStringLiteral("sha512") << QStringLiteral("SCRAM-SHA-512-PLUS") << false << false;
+    QTest::newRow("sha256-plus-interactive")
+        << QStringLiteral("sha256") << QStringLiteral("SCRAM-SHA-256-PLUS") << true << false;
+    QTest::newRow("sha256-plus-bad-signature")
+        << QStringLiteral("sha256") << QStringLiteral("SCRAM-SHA-256-PLUS") << false << true;
+}
+
+void SaslChannelBindingUnitTest::completeClient()
+{
+    QFETCH(QString, hash);
+    QFETCH(QString, mechanism);
+    QFETCH(bool, lateParams);
+    QFETCH(bool, badSignature);
+
+    const QString provider = QStringLiteral("qca-cyrus-sasl");
+    if (!QCA::isSupported("sasl", provider))
+        QSKIP("qca-cyrus-sasl is not available");
+    const QString macName = QStringLiteral("hmac(%1)").arg(hash);
+    if (!QCA::isSupported(QStringList {hash, macName, QStringLiteral("pbkdf2(%1)").arg(hash)}))
+        QSKIP("The reference hash, HMAC and PBKDF2 operations are unavailable");
+
+    QCA::SASL sasl(nullptr, provider);
+    if (!sasl.supportsChannelBinding())
+        QSKIP("The installed Cyrus SASL does not provide channel binding");
+    const QByteArray binding(32, '\x5a');
+    QVERIFY(sasl.setChannelBinding(QStringLiteral("tls-exporter"), binding, true));
+    auto credentials = [&sasl] {
+        sasl.setUsername(QStringLiteral("user"));
+        sasl.setPassword(QCA::SecureArray("pencil"));
+    };
+    if (lateParams)
+        connect(&sasl, &QCA::SASL::needParams, &sasl, [&](const QCA::SASL::Params &) {
+            credentials();
+            sasl.continueAfterParams();
+        });
+    else
+        credentials();
+
+    QSignalSpy started(&sasl, &QCA::SASL::clientStarted);
+    QSignalSpy steps(&sasl, &QCA::SASL::nextStep);
+    QSignalSpy authenticated(&sasl, &QCA::SASL::authenticated);
+    QSignalSpy errors(&sasl, &QCA::SASL::error);
+    sasl.startClient(QStringLiteral("test"), QStringLiteral("example.test"), QStringList {mechanism});
+    QTRY_VERIFY_WITH_TIMEOUT(!started.isEmpty() || !errors.isEmpty(), 5000);
+    QVERIFY2(errors.isEmpty(), "Unable to start the SCRAM client");
+    QCOMPARE(sasl.mechanism(), mechanism);
+
+    const QByteArray first = started.constFirst().at(1).toByteArray();
+    const QByteArray header("p=tls-exporter,,");
+    QVERIFY(first.startsWith(header));
+    const int nonceAt = first.indexOf(",r=");
+    QVERIFY(nonceAt >= header.size());
+    const QByteArray nonce     = first.mid(nonceAt + 3) + QByteArray("server-nonce");
+    const QByteArray salt      = QByteArray::fromHex("4125c247e4ab1e93e9524145");
+    const QByteArray challenge = QByteArray("r=") + nonce + ",s=" + salt.toBase64() + ",i=4096";
+    sasl.putStep(challenge);
+    QTRY_VERIFY_WITH_TIMEOUT(!steps.isEmpty() || !errors.isEmpty(), 5000);
+    QVERIFY2(errors.isEmpty(), "Unable to compute the SCRAM client proof");
+    const QByteArray final   = steps.constFirst().at(0).toByteArray();
+    const int        proofAt = final.lastIndexOf(",p=");
+    QVERIFY(proofAt > 0);
+    const QByteArray withoutProof = final.left(proofAt);
+    const int        bindingEnd   = withoutProof.indexOf(',');
+    QCOMPARE(QByteArray::fromBase64(withoutProof.mid(2, bindingEnd - 2)), header + binding);
+    const QByteArray authMessage = first.mid(header.size()) + ',' + challenge + ',' + withoutProof;
+
+    QCA::Hash               referenceHash(hash);
+    const unsigned          keyLength = unsigned(referenceHash.process(QCA::SecureArray()).size());
+    QCA::PBKDF2             kdf(hash);
+    const QCA::SymmetricKey salted =
+        kdf.makeKey(QCA::SecureArray("pencil"), QCA::InitializationVector(salt), keyLength, 4096u);
+    QCOMPARE(salted.size(), int(keyLength));
+    auto mac = [&](const QCA::SecureArray &key, const QCA::MemoryRegion &input) {
+        return QCA::SecureArray(QCA::MessageAuthenticationCode(macName, QCA::SymmetricKey(key)).process(input));
+    };
+    const QCA::SecureArray clientKey = mac(salted, QCA::SecureArray("Client Key"));
+    const QCA::SecureArray storedKey = QCA::Hash(hash).process(clientKey);
+    const QCA::SecureArray signature = mac(storedKey, authMessage);
+    QCA::SecureArray       proof(int(keyLength), 0);
+    for (int i = 0; i < int(keyLength); ++i)
+        proof[i] = clientKey[i] ^ signature[i];
+    QCOMPARE(final.mid(proofAt + 3), proof.toByteArray().toBase64());
+
+    const QCA::SecureArray serverKey = mac(salted, QCA::SecureArray("Server Key"));
+    QByteArray             verifier  = mac(serverKey, authMessage).toByteArray().toBase64();
+    if (badSignature)
+        verifier[0] = verifier[0] == 'a' ? 'b' : 'a';
+    sasl.putStep(QByteArray("v=") + verifier);
+    QTRY_VERIFY_WITH_TIMEOUT(!authenticated.isEmpty() || !errors.isEmpty(), 5000);
+    if (badSignature) {
+        QVERIFY(authenticated.isEmpty());
+        QCOMPARE(sasl.authCondition(), QCA::SASL::BadAuth);
+    } else {
+        QVERIFY(errors.isEmpty());
+        QCOMPARE(authenticated.size(), 1);
+    }
 }
 
 QTEST_MAIN(SaslChannelBindingUnitTest)

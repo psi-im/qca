@@ -11,6 +11,21 @@ This plugin provides features based on Cyrus SASL version 2.
 Requirements:
   Cyrus SASL 2.x (libsasl2)
 
+Cryptographic callbacks
+-----------------------
+
+When Cyrus SASL exposes SASL_CB_CRYPTO, the plugin supplies hash, HMAC and
+PBKDF2 operations through the public QCA API. Algorithm availability follows
+the installed QCA providers. SCRAM requires all three operations for its hash;
+an algorithm name alone does not guarantee that the mechanism is usable.
+The selected backend is authoritative: failures do not fall back to OpenSSL.
+
+A Cyrus library built with --with-crypto=callbacks needs no built-in OpenSSL
+backend for SCRAM and the core legacy verifiers. Other Cyrus mechanisms keep
+their own dependencies. Older Cyrus versions continue to use their existing
+cryptographic implementation. Static OpenSSL-enabled libraries still require
+libcrypto, regardless of whether the callback API is present.
+
 Installing
 ----------
 
