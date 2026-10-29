@@ -38,7 +38,7 @@ jobs:
       tag: ${{ steps.vars.outputs.tag }}
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - id: vars
         shell: bash
         run: echo "tag=deps-cyrus-sasl-${CYRUS_VERSION}-${CYRUS_REVISION}" >> "$GITHUB_OUTPUT"
@@ -76,7 +76,7 @@ jobs:
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Compute asset name
         id: asset
         shell: bash
