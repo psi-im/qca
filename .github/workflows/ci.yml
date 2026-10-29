@@ -18,7 +18,7 @@ jobs:
     name: Qt6 dependency lock
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - id: qt
         uses: ./.github/actions/load-dependency-lock
       - name: Verify locked Qt version
@@ -86,7 +86,7 @@ jobs:
   linux:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - run: |
@@ -123,7 +123,7 @@ jobs:
   linux-sasl-asan:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - run: |
@@ -178,7 +178,7 @@ jobs:
       matrix:
         shared: ["ON", "OFF"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - id: qt
@@ -212,13 +212,15 @@ jobs:
   windows-qt5:
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - name: Set up MSYS2 MINGW64 Qt5
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
+          # MINGW64/Qt5 is intentionally retained for the Windows 7 baseline.
+          suppress-deprecation-warnings: msystem-mingw64
           update: true
           install: >-
             git
@@ -340,7 +342,7 @@ jobs:
           PATH="$PWD/relocated-sdk/bin:/mingw64/bin:$PATH" ./consumer-build/qca-consumer.exe
           mv relocated-sdk sdk
       - name: Upload QCA3 Qt5 SDK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: qca3-qt5-windows-x64
           path: sdk/
@@ -362,7 +364,7 @@ jobs:
             platform: macos-x86_64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - name: Load locked Qt6 SDK version
@@ -442,7 +444,7 @@ jobs:
             qt_arch: android_x86_64
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - name: Load locked Qt6 SDK version

@@ -41,7 +41,7 @@ jobs:
             artifact: qca3-deb-ubuntu-26.04
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.source_ref || github.sha }}
           fetch-depth: 0
@@ -63,7 +63,7 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           apt-get -o Acquire::http::Timeout=30 -o Acquire::Retries=2 -o APT::Update::Error-Mode=any update
           apt-get install -y --no-install-recommends ca-certificates git sudo build-essential gh
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.source_ref || github.sha }}
           fetch-depth: 0
@@ -74,7 +74,7 @@ jobs:
           # container steps need the exception in their own Git configuration.
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Checkout packaging workflow helpers
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
           path: packaging-workflow
@@ -88,7 +88,7 @@ jobs:
     if: ${{ !inputs.debian_only }}
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.source_ref || github.sha }}
           fetch-depth: 0
@@ -96,6 +96,8 @@ jobs:
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
+          # MINGW64/Qt5 is intentionally retained for the Windows 7 baseline.
+          suppress-deprecation-warnings: msystem-mingw64
           update: true
           install: >-
             git
@@ -170,7 +172,7 @@ jobs:
           cmake --build consumer-build --parallel 2
           PATH="$PWD/relocated-sdk/bin:/mingw64/bin:$PATH" ./consumer-build/qca-consumer.exe
           mv relocated-sdk sdk
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: qca3-qt5-windows-x64
           path: sdk/
@@ -191,7 +193,7 @@ jobs:
             platform: macos-x86_64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.source_ref || github.sha }}
           fetch-depth: 0
@@ -331,11 +333,11 @@ jobs:
       - name: Stamp exact Qt6 SDK version
         shell: bash
         run: printf '%s\n' "${{ steps.dependency_lock.outputs.qt_version }}" > sdk/QT-SDK-VERSION.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: qca3-qt6-${{ matrix.platform }}
           path: sdk/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: qca3-qt6-${{ matrix.platform }}-symbols
           path: symbols/
@@ -356,7 +358,7 @@ jobs:
             qt_arch: android_x86
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.source_ref || github.sha }}
           fetch-depth: 0
@@ -449,11 +451,11 @@ jobs:
       - name: Stamp exact Android Qt6 SDK version
         shell: bash
         run: printf '%s\n' "${{ steps.dependency_lock.outputs.qt_version }}" > sdk/QT-SDK-VERSION.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: qca3-qt6-android-${{ matrix.abi }}
           path: sdk/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: qca3-qt6-android-${{ matrix.abi }}-symbols
           path: symbols/

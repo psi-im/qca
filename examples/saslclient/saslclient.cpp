@@ -38,10 +38,11 @@ static QString prompt(const QString &s)
     printf("* %s ", qPrintable(s));
     fflush(stdout);
     char line[256];
-    fgets(line, 255, stdin);
+    if (!fgets(line, sizeof(line), stdin))
+        return QString(); // EOF or input failure; never read an uninitialized buffer.
     QString result = QString::fromLatin1(line);
-    if (result[result.length() - 1] == QLatin1Char('\n'))
-        result.truncate(result.length() - 1);
+    if (result.endsWith(QLatin1Char('\n')))
+        result.chop(1);
     return result;
 }
 

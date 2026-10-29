@@ -191,11 +191,11 @@ runs:
       cmake -S consumer -B consumer-build -G Ninja
       cmake --build consumer-build
       ./consumer-build/qca-consumer
-  - uses: actions/upload-artifact@v4
+  - uses: actions/upload-artifact@v6
     with:
       name: ${{ inputs.artifact }}
       path: debs/*.deb
-  - uses: actions/upload-artifact@v4
+  - uses: actions/upload-artifact@v6
     with:
       name: ${{ inputs.artifact }}-symbols
       path: debug-debs/*.deb
