@@ -314,7 +314,7 @@ void WinCryptoTLSTest::configuredTrustWithoutCRLs()
     const auto fileName = directory.filePath(QStringLiteral("roots.pem"));
     QFile      file(fileName);
     QVERIFY(file.open(QIODevice::WriteOnly));
-    const auto pem =
+    const QByteArray pem =
         certificate.toPEM().toUtf8() + QByteArray("\n-----BEGIN X509 CRL-----\nAA==\n-----END X509 CRL-----\n");
     QCOMPARE(file.write(pem), qint64(pem.size()));
     file.close();
