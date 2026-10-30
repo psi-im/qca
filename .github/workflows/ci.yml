@@ -391,15 +391,18 @@ jobs:
         run: |
           set -euo pipefail
           cmake -S . -B build -DBUILD_TESTS=ON
-          cmake --build build --config Release --target saslchannelbindingunittest
+          cmake --build build --config Release --target kdfunittest saslchannelbindingunittest
           if [[ "$RUNNER_OS" == Windows ]]; then
             export PATH="$(cygpath -u "$QT_ROOT_DIR")/bin:$PWD/build/bin/Release:$PWD/build/lib/Release:$PWD/sdk/bin:$PATH"
+            # Visual Studio places modules in crypto/Release; QCA searches
+            # crypto directly. Exercise only the native crypto and SASL modules.
+            cp build/lib/qca3-qt6/crypto/Release/qca-{wincrypto,cyrus-sasl}.dll build/lib/qca3-qt6/crypto/
           elif [[ "$RUNNER_OS" == macOS ]]; then
             export DYLD_FRAMEWORK_PATH="$QT_ROOT_DIR/lib:${DYLD_FRAMEWORK_PATH:-}"
             export DYLD_LIBRARY_PATH="$PWD/build/lib:${DYLD_LIBRARY_PATH:-}"
           fi
           export QT_FORCE_STDERR_LOGGING=1
-          ctest --test-dir build -C Release -R '^SaslChannelBinding$' -V | tee sasl-tests.log
+          ctest --test-dir build -C Release -R '^(KeyDerivationFunction|SaslChannelBinding)$' -V | tee sasl-tests.log
           # Optional-provider tests normally skip missing mechanisms. These
           # bundles promise SCRAM, so require actual successful exchanges.
           for row in sha1-plus sha256-plus sha384-plus sha512-plus sha256-plus-interactive sha256-plus-bad-signature; do
