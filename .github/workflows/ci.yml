@@ -394,6 +394,9 @@ jobs:
           cmake --build build --config Release --target saslchannelbindingunittest
           if [[ "$RUNNER_OS" == Windows ]]; then
             export PATH="$(cygpath -u "$QT_ROOT_DIR")/bin:$PWD/build/bin/Release:$PWD/build/lib/Release:$PWD/sdk/bin:$PATH"
+          elif [[ "$RUNNER_OS" == macOS ]]; then
+            export DYLD_FRAMEWORK_PATH="$QT_ROOT_DIR/lib:${DYLD_FRAMEWORK_PATH:-}"
+            export DYLD_LIBRARY_PATH="$PWD/build/lib:${DYLD_LIBRARY_PATH:-}"
           fi
           export QT_FORCE_STDERR_LOGGING=1
           ctest --test-dir build -C Release -R '^SaslChannelBinding$' -V | tee sasl-tests.log
