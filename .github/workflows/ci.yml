@@ -8,8 +8,8 @@ on:
 
 env:
   CYRUS_VERSION: 2.1.28
-  CYRUS_REVISION: r5
-  CYRUS_TAG: deps-cyrus-sasl-2.1.28-r5
+  CYRUS_REVISION: r6
+  CYRUS_TAG: deps-cyrus-sasl-2.1.28-r6
   ANDROID_NDK_VERSION: r27c
   ANDROID_API: 28
 
@@ -386,6 +386,22 @@ jobs:
           if [ "$RUNNER_OS" = Windows ]; then
             test -n "$(find build -type f -name '*qca-wincrypto*' -print -quit)"
           fi
+      - name: Verify SCRAM exchanges with the bundled Cyrus library
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DBUILD_TESTS=ON
+          cmake --build build --config Release --target saslchannelbindingunittest
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            export PATH="$(cygpath -u "$QT_ROOT_DIR")/bin:$PWD/build/bin/Release:$PWD/build/lib/Release:$PWD/sdk/bin:$PATH"
+          fi
+          export QT_FORCE_STDERR_LOGGING=1
+          ctest --test-dir build -C Release -R '^SaslChannelBinding$' -V | tee sasl-tests.log
+          # Optional-provider tests normally skip missing mechanisms. These
+          # bundles promise SCRAM, so require actual successful exchanges.
+          for row in sha1-plus sha256-plus sha384-plus sha512-plus sha256-plus-interactive sha256-plus-bad-signature; do
+            grep -F "PASS   : SaslChannelBindingUnitTest::completeClient($row)" sasl-tests.log
+          done
       - name: Install and relocate SDK
         shell: bash
         run: |

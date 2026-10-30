@@ -78,7 +78,7 @@ if(SASL2_FOUND)
   if(SASL2_STATIC)
     if(WIN32)
       set_property(TARGET Sasl2::Sasl2 APPEND PROPERTY
-        INTERFACE_LINK_LIBRARIES "ws2_32;advapi32;crypt32")
+        INTERFACE_LINK_LIBRARIES "ws2_32;advapi32;crypt32;bcrypt")
     elseif(UNIX)
       find_package(Threads REQUIRED)
       set_property(TARGET Sasl2::Sasl2 APPEND PROPERTY

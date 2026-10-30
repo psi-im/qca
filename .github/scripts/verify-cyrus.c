@@ -1,4 +1,7 @@
 #include <sasl/sasl.h>
+#ifndef SASL_CB_CRYPTO
+#error The dependency bundle must provide cryptographic callbacks
+#endif
 #include <stdio.h>
 #include <string.h>
 
@@ -36,7 +39,7 @@ static int has_mechanism(const char **mechanisms, const char *expected)
 
 int main(void)
 {
-    static const char *const expected[] = {"PLAIN", "SCRAM-SHA-256", "DIGEST-MD5"};
+    static const char *const expected[] = {"PLAIN", "SCRAM-SHA-1", "SCRAM-SHA-256", "SCRAM-SHA-384", "SCRAM-SHA-512"};
     const char             **mechanisms;
     size_t                   i;
     int                      failed = 0;

@@ -13,18 +13,14 @@ configure_args=(
   --disable-shared
   --enable-plain
   --enable-scram
-  --enable-digest
+  --disable-opaque
+  --disable-passdss
   --disable-anon
-  --disable-cram
-  --disable-login
-  --disable-ntlm
   --disable-otp
   --disable-srp
   --disable-sample
   --disable-sql
   --disable-gssapi
-  --disable-cmulocal
-  --disable-krb4
   --disable-macos-framework
   --with-dblib=none
   --with-sphinx-build=no
@@ -36,13 +32,12 @@ configure_args=(
 )
 if [[ -n "$host" ]]; then
   configure_args+=("--host=$host")
-  # Gentoo explicitly separates the build-machine compiler from the target
-  # compiler for cross builds. This is important for configure-time helpers.
+  # Keep configure-time helpers on the build machine during cross builds.
   export CC_FOR_BUILD="${CC_FOR_BUILD:-cc}"
 fi
 
 pushd "$src"
-# Gentoo pins C17 because Cyrus SASL 2.1.28 does not build cleanly as C23.
+# Keep the source build compatible with compilers whose default is C23.
 # PIC is required because this archive is linked into a QCA shared/module plugin.
 CFLAGS="${CFLAGS:-} -std=gnu17 -fPIC" ./configure "${configure_args[@]}"
 # Cyrus SASL 2.1.28 is not reliably parallel-build safe. This dependency is
@@ -60,8 +55,7 @@ fi
 nm_bin=${NM:-nm}
 for symbol in \
   plain_client_plug_init plain_server_plug_init \
-  scram_client_plug_init scram_server_plug_init \
-  digestmd5_client_plug_init digestmd5_server_plug_init; do
+  scram_client_plug_init scram_server_plug_init; do
   if ! "$nm_bin" -g "$archive" 2>/dev/null | awk -v wanted="$symbol" '
     {
       if (NF < 2)

@@ -25,8 +25,9 @@ concurrency:
 
 env:
   CYRUS_VERSION: 2.1.28
-  CYRUS_REVISION: r5
-  CYRUS_GENTOO_PATCHSET: cyrus-sasl-2.1.28-r4-patches
+  CYRUS_REVISION: r6
+  CYRUS_REPOSITORY: Ri0n/cyrus-sasl
+  CYRUS_COMMIT: 590be2c5bd2ae9824631061dddc50526a2ab2038
   OPENSSL_VERSION: 3.5.2
   ANDROID_NDK_VERSION: r27c
   ANDROID_API: 28
@@ -109,7 +110,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y autoconf automake libtool make perl patch
 
-      - name: Prepare Cyrus SASL with Gentoo patchset
+      - name: Prepare pinned Cyrus SASL fork
         if: steps.existing.outputs.skip != 'true'
         shell: bash
         run: |
@@ -131,14 +132,10 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          vcpkg install openssl:x64-windows
           python packaging/cyrus-sasl/patch-windows-static.py "cyrus-sasl-$env:CYRUS_VERSION"
           cd "cyrus-sasl-$env:CYRUS_VERSION"
-          $root = $env:VCPKG_INSTALLATION_ROOT
           Push-Location lib
-          nmake /f NTMakefile STATIC=no STATIC_BUNDLE=1 CODEGEN=/MD CFG=Release `
-            OPENSSL_INCLUDE="$root\installed\x64-windows\include" `
-            OPENSSL_LIBPATH="$root\installed\x64-windows\lib"
+          nmake /f NTMakefile STATIC=no STATIC_BUNDLE=1 SASL_CRYPTO=cng CODEGEN=/MD CFG=Release
           Pop-Location
           New-Item -ItemType Directory -Force ../bundle/include/sasl, ../bundle/lib | Out-Null
           Copy-Item include\*.h ../bundle/include/sasl/
@@ -207,12 +204,15 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          $root = $env:VCPKG_INSTALLATION_ROOT
           cl /nologo /MD /DWIN32 /DLIBSASL_EXPORTS /I bundle\include .github\scripts\verify-cyrus.c `
             bundle\lib\libsasl2-static.lib `
-            "$root\installed\x64-windows\lib\libcrypto.lib" ws2_32.lib advapi32.lib /Fe:verify-cyrus.exe
-          $env:PATH = "$root\installed\x64-windows\bin;$env:PATH"
+            bcrypt.lib ws2_32.lib advapi32.lib /Fe:verify-cyrus.exe
           .\verify-cyrus.exe
+          $deps = (dumpbin /DEPENDENTS verify-cyrus.exe) | Out-String
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect Cyrus SASL dependencies' }
+          if ($deps -match '(?i)(libcrypto|libssl|libsasl|sasl2).*\.dll') {
+            throw 'Native static Cyrus SASL unexpectedly imports a crypto or SASL DLL'
+          }
 
       - name: Verify macOS mechanisms
         if: steps.existing.outputs.skip != 'true' && matrix.kind == 'unix'
@@ -239,7 +239,7 @@ jobs:
             exit 1
           fi
           llvm-nm bundle/lib/libsasl2.a > cyrus-symbols.txt
-          for symbol in plain_client_plug_init scram_client_plug_init digestmd5_client_plug_init; do
+          for symbol in plain_client_plug_init scram_client_plug_init; do
             if ! grep -Eq "[[:space:]]${symbol}$" cyrus-symbols.txt; then
               echo "Android Cyrus archive is missing ${symbol}" >&2
               exit 1
@@ -262,9 +262,11 @@ jobs:
           cat > bundle/qca-cyrus-sasl-bundle.txt <<META
           cyrus-sasl=${CYRUS_VERSION}
           revision=${CYRUS_REVISION}
-          gentoo-patchset=${CYRUS_GENTOO_PATCHSET}
+          source-repository=${CYRUS_REPOSITORY}
+          source-commit=${CYRUS_COMMIT}
           platform=${{ matrix.platform }}
-          mechanisms=PLAIN,SCRAM,DIGEST-MD5
+          mechanisms=PLAIN,SCRAM
+          crypto-backend=${{ matrix.kind == 'windows' && 'cng' || 'openssl' }}
           linkage=static
           pic=$pic
           META
