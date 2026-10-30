@@ -25,6 +25,7 @@
 
 #include <QTest>
 #include <QtCrypto>
+#include <limits>
 
 #ifdef QT_STATICPLUGIN
 #include "import_plugins.h"
@@ -46,6 +47,11 @@ private Q_SLOTS:
     void pbkdf2Tests();
     void pbkdf2TimeTest();
     void pbkdf2extraTests();
+    void pbkdf2Sha2Tests_data();
+    void pbkdf2Sha2Tests();
+    void pbkdf2Sha2TimeTests_data();
+    void pbkdf2Sha2TimeTests();
+    void pbkdf2OsslInvalidParameters();
     void hkdfTests_data();
     void hkdfTests();
 
@@ -427,6 +433,171 @@ void KDFUnitTest::pbkdf2extraTests()
                          QStringLiteral("6b9cf26d45455a43a5b8bb276a403b39e7fe37a0c41e02c281ff3069e1e94f52"));
             }
         }
+    }
+}
+
+void KDFUnitTest::pbkdf2Sha2Tests_data()
+{
+    QTest::addColumn<QString>("algorithm");
+    QTest::addColumn<QByteArray>("password");
+    QTest::addColumn<QByteArray>("salt");
+    QTest::addColumn<unsigned>("iterations");
+    QTest::addColumn<QByteArray>("expected");
+
+    // Fixed known answers generated independently with Python hashlib.
+    QTest::newRow("sha224-basic") << QStringLiteral("sha224") << QByteArray::fromHex("70617373776f7264")
+                                  << QByteArray::fromHex("73616c74") << 1u
+                                  << QByteArray::fromHex("3c198cbdb9464b7857966bd05b7bc92bc1cc4e6e63155d4e490557fd");
+    QTest::newRow("sha224-binary") << QStringLiteral("sha224") << QByteArray::fromHex("7061737300776f7264ff")
+                                   << QByteArray::fromHex("7361006c7480") << 2u
+                                   << QByteArray::fromHex(
+                                          "88cfbfb90a402f792e8f1c0ace317ee89420bbbca0af0293ad629dae97b9ca51481551");
+    QTest::newRow("sha224-empty") << QStringLiteral("sha224") << QByteArray::fromHex("") << QByteArray::fromHex("")
+                                  << 3u
+                                  << QByteArray::fromHex("191cf8762867d504c8100f46507395ea334f09546d4b0334af742056");
+    QTest::newRow("sha224-long-key")
+        << QStringLiteral("sha224") << QByteArray("password").repeated(30) << QByteArray::fromHex("73616c74") << 4096u
+        << QByteArray::fromHex(
+               "27f9bea0f8f160dc2fb89b25b51845800a048b8dd7b3a4947233542cb349c4e0446816c74afcd5050fd6f8d2770b3602e17269e"
+               "337fc18d6be");
+    QTest::newRow("sha256-basic") << QStringLiteral("sha256") << QByteArray::fromHex("70617373776f7264")
+                                  << QByteArray::fromHex("73616c74") << 1u
+                                  << QByteArray::fromHex(
+                                         "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b");
+    QTest::newRow("sha256-binary")
+        << QStringLiteral("sha256") << QByteArray::fromHex("7061737300776f7264ff")
+        << QByteArray::fromHex("7361006c7480") << 2u
+        << QByteArray::fromHex("6f2248ac9aaf1667fdfdcc19a0d9dfbe99035618637562913a239e98bbbef28fb8b81f28138792");
+    QTest::newRow("sha256-empty") << QStringLiteral("sha256") << QByteArray::fromHex("") << QByteArray::fromHex("")
+                                  << 3u
+                                  << QByteArray::fromHex(
+                                         "b372796454d37ac042a195b62eeb7cfed38ddd92f757e2fee04210df03ac1d2e");
+    QTest::newRow("sha256-long-key")
+        << QStringLiteral("sha256") << QByteArray("password").repeated(30) << QByteArray::fromHex("73616c74") << 4096u
+        << QByteArray::fromHex(
+               "8b7cd31097d7597a41a92b683105b842750d38b81bed4a671eca98800f7db4d4210812de6e7c4a0afc002b477fbd54326629a2a"
+               "a2889111acd816f9507a2d09f34");
+    QTest::newRow("sha384-basic")
+        << QStringLiteral("sha384") << QByteArray::fromHex("70617373776f7264") << QByteArray::fromHex("73616c74") << 1u
+        << QByteArray::fromHex(
+               "c0e14f06e49e32d73f9f52ddf1d0c5c7191609233631dadd76a567db42b78676b38fc800cc53ddb642f5c74442e62be4");
+    QTest::newRow("sha384-binary") << QStringLiteral("sha384") << QByteArray::fromHex("7061737300776f7264ff")
+                                   << QByteArray::fromHex("7361006c7480") << 2u
+                                   << QByteArray::fromHex(
+                                          "ce93d8feefb3ab365187c044ee45ea19d23cbdf1bd15a45205bd9920309d4e0565600e019b04"
+                                          "d2a4d6c1c29e8f37bcbad4058f7ce1e332");
+    QTest::newRow("sha384-empty")
+        << QStringLiteral("sha384") << QByteArray::fromHex("") << QByteArray::fromHex("") << 3u
+        << QByteArray::fromHex(
+               "c3a702cb4faaabd111e2b64fd7851aa27834875d34341d0e3b3625175571f87c35d09b9d791f77b3c52ff265eec208cf");
+    QTest::newRow("sha384-long-key")
+        << QStringLiteral("sha384") << QByteArray("password").repeated(30) << QByteArray::fromHex("73616c74") << 4096u
+        << QByteArray::fromHex(
+               "7c5022ece2a78fbff10a5abb00be1fb025f7be798ecccbae668cb329eef9480cdeab2293e9d59bfa1029875b0cd2ed6191d41d3"
+               "34aac71a87f9ae8be9791aef79bf5c229d89be4489beb1fadadf74681cbac4d994186232bcfcd473e34b46897d7");
+    QTest::newRow("sha512-basic") << QStringLiteral("sha512") << QByteArray::fromHex("70617373776f7264")
+                                  << QByteArray::fromHex("73616c74") << 1u
+                                  << QByteArray::fromHex(
+                                         "867f70cf1ade02cff3752599a3a53dc4af34c7a669815ae5d513554e1c8cf252c02d470a285a0"
+                                         "501bad999bfe943c08f050235d7d68b1da55e63f73b60a57fce");
+    QTest::newRow("sha512-binary") << QStringLiteral("sha512") << QByteArray::fromHex("7061737300776f7264ff")
+                                   << QByteArray::fromHex("7361006c7480") << 2u
+                                   << QByteArray::fromHex(
+                                          "2946e91916ee354fb76b34d9cec96babe00c29ddb46baca3e83a70dc5e38e253597221f08608"
+                                          "e2101f94f74d96a7ac707bedacbab9173fb8eb34d8f039f1e5c638106a6aebbba8");
+    QTest::newRow("sha512-empty") << QStringLiteral("sha512") << QByteArray::fromHex("") << QByteArray::fromHex("")
+                                  << 3u
+                                  << QByteArray::fromHex(
+                                         "ba78a2c18fe1f3cfffaba0f93ccf85fc342edf2c34ff439f928c464fe04ee9c43d6516594282b"
+                                         "f31d9b80ba31d67e6d076cc2e45ba2d5c9d6bca44f288940c5d");
+    QTest::newRow("sha512-long-key")
+        << QStringLiteral("sha512") << QByteArray("password").repeated(30) << QByteArray::fromHex("73616c74") << 4096u
+        << QByteArray::fromHex(
+               "53d1de4f2acb6445e863aad6a2ffee9a281054a300d0f2d56bdd8eabdf231080ca57719fef7ab827bafef8fc546a7635dc8ea2e"
+               "afecfdfc6a678d0fde7c1364d8790d4d2354cd52fb971bd44f1d88490ac8802d843f966dc56353bf00d23f24cb6efae569e49c1"
+               "772921e38bf70707bd4d5db5fd5bc3fe802a032a3b7fe2548bd5");
+}
+
+void KDFUnitTest::pbkdf2Sha2Tests()
+{
+    QFETCH(QString, algorithm);
+    QFETCH(QByteArray, password);
+    QFETCH(QByteArray, salt);
+    QFETCH(unsigned, iterations);
+    QFETCH(QByteArray, expected);
+    bool tested = false;
+    for (const auto &provider : providersToTest) {
+        if (!QCA::isSupported(QStringList {QStringLiteral("pbkdf2(%1)").arg(algorithm)}, provider))
+            continue;
+        tested = true;
+        QCA::PBKDF2 kdf(algorithm, provider);
+        QCA::PBKDF2 copy = kdf;
+        copy.context(); // Detach and verify that the selected digest is preserved.
+        const QCA::SecureArray          secret(password);
+        const QCA::InitializationVector iv(salt);
+        QCOMPARE(kdf.makeKey(secret, iv, unsigned(expected.size()), iterations).toByteArray(), expected);
+        QCOMPARE(copy.makeKey(secret, iv, unsigned(expected.size()), iterations).toByteArray(), expected);
+    }
+    if (!tested)
+        QSKIP("No provider supports the selected PBKDF2 digest");
+}
+
+void KDFUnitTest::pbkdf2Sha2TimeTests_data()
+{
+    QTest::addColumn<QString>("algorithm");
+    QTest::newRow("sha224") << QStringLiteral("sha224");
+    QTest::newRow("sha256") << QStringLiteral("sha256");
+    QTest::newRow("sha384") << QStringLiteral("sha384");
+    QTest::newRow("sha512") << QStringLiteral("sha512");
+}
+
+void KDFUnitTest::pbkdf2Sha2TimeTests()
+{
+    QFETCH(QString, algorithm);
+    bool tested = false;
+    for (const auto &provider : providersToTest) {
+        if (!QCA::isSupported(QStringList {QStringLiteral("pbkdf2(%1)").arg(algorithm)}, provider))
+            continue;
+        tested = true;
+        QCA::PBKDF2                     kdf(algorithm, provider);
+        const QCA::SecureArray          password("password");
+        const QCA::InitializationVector salt(QByteArray("salt"));
+        for (const int milliseconds : {-1, 0, 5}) {
+            unsigned   iterations = 0;
+            const auto key        = kdf.makeKey(password, salt, 37, milliseconds, &iterations);
+            QCOMPARE(key.size(), 37);
+            QVERIFY(iterations > 0);
+            QCOMPARE(key, kdf.makeKey(password, salt, 37, iterations));
+        }
+    }
+    if (!tested)
+        QSKIP("No provider supports the selected PBKDF2 digest");
+}
+
+void KDFUnitTest::pbkdf2OsslInvalidParameters()
+{
+    const QString provider = QStringLiteral("qca-ossl");
+    if (!QCA::isSupported("pbkdf2(sha1)", provider))
+        QSKIP("qca-ossl is not available");
+    const unsigned                  tooLarge = unsigned(std::numeric_limits<int>::max()) + 1u;
+    const QCA::SecureArray          password("password");
+    const QCA::InitializationVector salt(QByteArray("salt"));
+    const QStringList               algorithms = {QStringLiteral("sha1"),
+                                                  QStringLiteral("sha224"),
+                                                  QStringLiteral("sha256"),
+                                                  QStringLiteral("sha384"),
+                                                  QStringLiteral("sha512")};
+    for (const auto &algorithm : algorithms) {
+        QVERIFY(QCA::isSupported(QStringList {QStringLiteral("pbkdf2(%1)").arg(algorithm)}, provider));
+        QCA::PBKDF2 kdf(algorithm, provider);
+        QVERIFY(kdf.makeKey(password, salt, 32, 0u).isEmpty());
+        QVERIFY(kdf.makeKey(password, salt, 32, tooLarge).isEmpty());
+        QVERIFY(kdf.makeKey(password, salt, tooLarge, 1u).isEmpty());
+        QVERIFY(kdf.makeKey(password, salt, 0, 1u).isEmpty());
+        QVERIFY(kdf.makeKey(password, salt, 32, 1, nullptr).isEmpty());
+        unsigned iterations = 123;
+        QVERIFY(kdf.makeKey(password, salt, tooLarge, 0, &iterations).isEmpty());
+        QCOMPARE(iterations, 0u);
     }
 }
 

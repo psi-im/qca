@@ -14,6 +14,7 @@ This plugin provides features based on OpenSSL. It implements:
 * Block Ciphers
 * Keyed Hash Message Authentication Code (HMAC), using SHA1, MD5, RIPEMD160
 * Public keys - RSA, DSA, Diffie-Hellman
+* PBKDF2 using HMAC-SHA1, SHA224, SHA256, SHA384 and SHA512
 * PKCS#12
 * SSL/TLS
 * CMS (for S/MIME)

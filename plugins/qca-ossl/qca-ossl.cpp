@@ -23,8 +23,8 @@
 #include "certcontext.h"
 #include "dhkey.h"
 #include "dsakey.h"
-#include "ed25519key.h"
 #include "dtlscontext.h"
+#include "ed25519key.h"
 #include "pkeycontext.h"
 #include "rsakey.h"
 #include "tlscontext.h"
@@ -42,6 +42,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 
 #include <openssl/err.h>
 #include <openssl/opensslv.h>
@@ -367,8 +368,9 @@ class opensslPbkdf2Context : public KDFContext
 {
     Q_OBJECT
 public:
-    opensslPbkdf2Context(Provider *p, const QString &type)
+    opensslPbkdf2Context(const EVP_MD *algorithm, Provider *p, const QString &type)
         : KDFContext(p, type)
+        , m_algorithm(algorithm)
     {
     }
 
@@ -382,14 +384,19 @@ public:
                          unsigned int                keyLength,
                          unsigned int                iterationCount) override
     {
-        SecureArray out(keyLength);
-        PKCS5_PBKDF2_HMAC_SHA1((char *)secret.data(),
-                               secret.size(),
-                               (unsigned char *)salt.data(),
-                               salt.size(),
-                               iterationCount,
-                               keyLength,
-                               (unsigned char *)out.data());
+        if (!keyLength || keyLength > unsigned(std::numeric_limits<int>::max()) || !iterationCount ||
+            iterationCount > unsigned(std::numeric_limits<int>::max()))
+            return SymmetricKey();
+        SecureArray out(static_cast<int>(keyLength));
+        if (PKCS5_PBKDF2_HMAC(secret.constData(),
+                              secret.size(),
+                              reinterpret_cast<const unsigned char *>(salt.constData()),
+                              salt.size(),
+                              int(iterationCount),
+                              m_algorithm,
+                              int(keyLength),
+                              reinterpret_cast<unsigned char *>(out.data())) != 1)
+            return SymmetricKey();
         return out;
     }
 
@@ -399,35 +406,31 @@ public:
                          int                         msecInterval,
                          unsigned int               *iterationCount) override
     {
-        Q_ASSERT(iterationCount != nullptr);
-        QElapsedTimer timer;
-        SecureArray   out(keyLength);
-
+        if (!iterationCount)
+            return SymmetricKey();
         *iterationCount = 0;
+        if (!keyLength || keyLength > unsigned(std::numeric_limits<int>::max()))
+            return SymmetricKey();
+        // Measure actual PBKDF2 work and reuse the final sample, rather than
+        // counting one-iteration calls dominated by allocation and setup.
+        QElapsedTimer timer;
         timer.start();
-
-        // PBKDF2 needs an iterationCount itself, unless PBKDF1.
-        // So we need to calculate first the number of iterations for
-        // That time interval, then feed the iterationCounts to PBKDF2
-        while (timer.elapsed() < msecInterval) {
-            PKCS5_PBKDF2_HMAC_SHA1((char *)secret.data(),
-                                   secret.size(),
-                                   (unsigned char *)salt.data(),
-                                   salt.size(),
-                                   1,
-                                   keyLength,
-                                   (unsigned char *)out.data());
-            ++(*iterationCount);
-        }
-
-        // Now we can directely call makeKey base function,
-        // as we now have the iterationCount
-        out = makeKey(secret, salt, keyLength, *iterationCount);
-
-        return out;
+        unsigned       count   = 1;
+        const unsigned maximum = unsigned(std::numeric_limits<int>::max());
+        do {
+            auto sample = makeKey(secret, salt, keyLength, count);
+            if (sample.size() != int(keyLength))
+                return SymmetricKey();
+            if (timer.elapsed() >= msecInterval || count == maximum) {
+                *iterationCount = count;
+                return sample;
+            }
+            count = count > maximum / 2 ? maximum : count * 2;
+        } while (true);
     }
 
-protected:
+private:
+    const EVP_MD *m_algorithm;
 };
 
 #ifndef LIBRESSL_VERSION_NUMBER
@@ -2298,6 +2301,18 @@ public:
         }
         list += QStringLiteral("pkcs12");
         list += QStringLiteral("pbkdf2(sha1)");
+#ifdef SHA224_DIGEST_LENGTH
+        list += QStringLiteral("pbkdf2(sha224)");
+#endif
+#ifdef SHA256_DIGEST_LENGTH
+        list += QStringLiteral("pbkdf2(sha256)");
+#endif
+#ifdef SHA384_DIGEST_LENGTH
+        list += QStringLiteral("pbkdf2(sha384)");
+#endif
+#ifdef SHA512_DIGEST_LENGTH
+        list += QStringLiteral("pbkdf2(sha512)");
+#endif
 #ifndef LIBRESSL_VERSION_NUMBER
         list += QStringLiteral("hkdf(sha256)");
 #endif // LIBRESSL_VERSION_NUMBER
@@ -2375,7 +2390,23 @@ public:
             return new opensslHashContext(EVP_blake2b512(), this, type);
 #endif
         else if (type == QLatin1String("pbkdf2(sha1)"))
-            return new opensslPbkdf2Context(this, type);
+            return new opensslPbkdf2Context(EVP_sha1(), this, type);
+#ifdef SHA224_DIGEST_LENGTH
+        else if (type == QLatin1String("pbkdf2(sha224)"))
+            return new opensslPbkdf2Context(EVP_sha224(), this, type);
+#endif
+#ifdef SHA256_DIGEST_LENGTH
+        else if (type == QLatin1String("pbkdf2(sha256)"))
+            return new opensslPbkdf2Context(EVP_sha256(), this, type);
+#endif
+#ifdef SHA384_DIGEST_LENGTH
+        else if (type == QLatin1String("pbkdf2(sha384)"))
+            return new opensslPbkdf2Context(EVP_sha384(), this, type);
+#endif
+#ifdef SHA512_DIGEST_LENGTH
+        else if (type == QLatin1String("pbkdf2(sha512)"))
+            return new opensslPbkdf2Context(EVP_sha512(), this, type);
+#endif
 #ifndef LIBRESSL_VERSION_NUMBER
         else if (type == QLatin1String("hkdf(sha256)"))
             return new opensslHkdfContext(this, type);
