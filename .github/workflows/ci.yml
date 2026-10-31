@@ -89,6 +89,13 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+      - name: Check case-sensitive WinGSS SSPI header include
+        shell: bash
+        run: |
+          # Windows hosts hide include-case mistakes; MinGW cross-builds on
+          # Linux require the real lowercase SDK header spelling.
+          grep -Fxq '#include <security.h>' plugins/qca-wingss/gssapi_p.h
+          ! grep -Fq '#include <Security.h>' plugins/qca-wingss/gssapi_p.h
       - run: |
           sudo apt-get update
           sudo apt-get install -y \
