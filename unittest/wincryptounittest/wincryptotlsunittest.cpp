@@ -27,7 +27,9 @@ const QString ProviderName = QStringLiteral("qca-wincrypto");
 class NativeServer
 {
 public:
-    explicit NativeServer(bool expired = false, bool tls13 = false, bool conflictingSAN = false)
+    explicit NativeServer(bool expired = false, bool tls13 = false, bool conflictingSAN = false,
+                          bool requestClientCertificate = false)
+        : _requestClientCertificate(requestClientCertificate)
     {
         _keyName = QStringLiteral("qca-wincrypto-test-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
         const auto *keyName = reinterpret_cast<const wchar_t *>(_keyName.utf16());
@@ -149,7 +151,7 @@ public:
                                                   _haveCtx ? &_ctx : nullptr,
                                                   _input.isEmpty() ? nullptr : &desc,
                                                   ASC_REQ_CONFIDENTIALITY | ASC_REQ_STREAM | ASC_REQ_ALLOCATE_MEMORY |
-                                                      ASC_REQ_EXTENDED_ERROR,
+                                                      ASC_REQ_EXTENDED_ERROR | (_requestClientCertificate ? ASC_REQ_MUTUAL_AUTH : 0),
                                                   SECURITY_NATIVE_DREP,
                                                   &_ctx,
                                                   &output,
@@ -239,6 +241,7 @@ public:
     bool complete = false, failed = false;
 
 private:
+    bool                      _requestClientCertificate = false;
     HCRYPTPROV                _provider = 0;
     HCRYPTKEY                 _key      = 0;
     QString                   _keyName;
@@ -269,6 +272,7 @@ private Q_SLOTS:
     void nativeIdentities();
     void clientTLS_data();
     void clientTLS();
+    void optionalClientCertificateRequest();
     void publicTLS();
     void publicTLS_data();
     void unsupportedConfiguration();
@@ -549,6 +553,43 @@ void WinCryptoTLSTest::clientTLS()
     client->update({}, message);
     client->waitForResultsReady(1000);
     QCOMPARE(client->result(), QCA::TLSContext::Error);
+}
+
+void WinCryptoTLSTest::optionalClientCertificateRequest()
+{
+    // Exercise an SSPI server CertificateRequest with a client that has no
+    // configured certificate. NativeServer and its trust anchor are ephemeral.
+    NativeServer server(false, false, false, true);
+    QVERIFY(server.valid());
+    auto client = context();
+    QVERIFY(client);
+    client->setup(false, QStringLiteral("qca.test"), false);
+    QCA::CertificateCollection trust;
+    trust.addCertificate(QCA::Certificate::fromDER(server.der(), nullptr, ProviderName));
+    client->setTrustedCertificates(trust);
+    client->start();
+    QVERIFY(client->waitForResultsReady(1000));
+    QCOMPARE(client->result(), QCA::TLSContext::Success);
+    client->update({}, {});
+    client->waitForResultsReady(1000);
+    for (int round = 0; round < 20 && (!server.complete || client->result() != QCA::TLSContext::Success); ++round) {
+        const auto outgoing = client->to_net();
+        const auto reply = server.step(outgoing);
+        QVERIFY(!server.failed);
+        for (int offset = 0; offset < reply.size(); offset += 7) {
+            client->update(reply.mid(offset, 7), {});
+            client->waitForResultsReady(1000);
+            QVERIFY(client->result() != QCA::TLSContext::Error);
+        }
+    }
+    QVERIFY(server.complete);
+    QCOMPARE(client->result(), QCA::TLSContext::Success);
+    QCOMPARE(client->peerCertificateValidity(), QCA::ValidityGood);
+    const QByteArray message("secure data after optional client certificate request");
+    client->update({}, message);
+    client->waitForResultsReady(1000);
+    QCOMPARE(client->result(), QCA::TLSContext::Success);
+    QCOMPARE(server.decrypt(client->to_net()), message);
 }
 
 void WinCryptoTLSTest::publicTLS_data()

@@ -110,6 +110,7 @@ private Q_SLOTS:
     }
     void interoperability_data();
     void interoperability();
+    void streamClientCertificateRequest();
     void rsaOperations();
     void rsaSerialization();
 
@@ -314,6 +315,139 @@ void WinCryptoOpenSSLTest::rsaSerialization()
                  1);
     }
 }
+
+void WinCryptoOpenSSLTest::streamClientCertificateRequest()
+{
+    // These stream TLS tests are optional OpenSSL interoperability tests.
+    // WinCrypto's production and native-only test builds require no OpenSSL.
+    for (const bool required : {false, true}) {
+        auto keyContext = std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)>(
+            EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr), EVP_PKEY_CTX_free);
+        QVERIFY(keyContext);
+        QVERIFY(EVP_PKEY_keygen_init(keyContext.get()) > 0);
+        QVERIFY(EVP_PKEY_CTX_set_rsa_keygen_bits(keyContext.get(), 2048) > 0);
+        EVP_PKEY *generated = nullptr;
+        QVERIFY(EVP_PKEY_keygen(keyContext.get(), &generated) > 0);
+        auto key = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>(generated, EVP_PKEY_free);
+        auto cert = std::unique_ptr<X509, decltype(&X509_free)>(X509_new(), X509_free);
+        QVERIFY(cert);
+        QVERIFY(X509_set_version(cert.get(), 2) == 1);
+        QVERIFY(ASN1_INTEGER_set(X509_get_serialNumber(cert.get()), required ? 2 : 1) == 1);
+        QVERIFY(X509_gmtime_adj(X509_getm_notBefore(cert.get()), -60));
+        QVERIFY(X509_gmtime_adj(X509_getm_notAfter(cert.get()), 3600));
+        QVERIFY(X509_set_pubkey(cert.get(), key.get()) == 1);
+        auto *name = X509_get_subject_name(cert.get());
+        QVERIFY(name);
+        QVERIFY(X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+                                            reinterpret_cast<const unsigned char *>("qca.test"), -1, -1, 0) == 1);
+        QVERIFY(X509_set_issuer_name(cert.get(), name) == 1);
+        X509V3_CTX extensions {};
+        X509V3_set_ctx(&extensions, cert.get(), cert.get(), nullptr, nullptr, 0);
+        auto san = std::unique_ptr<X509_EXTENSION, decltype(&X509_EXTENSION_free)>(
+            X509V3_EXT_conf_nid(nullptr, &extensions, NID_subject_alt_name,
+                                const_cast<char *>("DNS:qca.test")), X509_EXTENSION_free);
+        QVERIFY(san && X509_add_ext(cert.get(), san.get(), -1) == 1);
+        QVERIFY(X509_sign(cert.get(), key.get(), EVP_sha256()) > 0);
+
+        auto ctx = std::unique_ptr<SSL_CTX, decltype(&SSL_CTX_free)>(SSL_CTX_new(TLS_server_method()), SSL_CTX_free);
+        QVERIFY(ctx);
+        QVERIFY(SSL_CTX_set_min_proto_version(ctx.get(), TLS1_2_VERSION));
+        QVERIFY(SSL_CTX_set_max_proto_version(ctx.get(), TLS1_2_VERSION));
+        QVERIFY(SSL_CTX_use_certificate(ctx.get(), cert.get()) == 1);
+        QVERIFY(SSL_CTX_use_PrivateKey(ctx.get(), key.get()) == 1);
+        QVERIFY(SSL_CTX_check_private_key(ctx.get()));
+        // SSL_VERIFY_PEER sends CertificateRequest. FAIL_IF_NO_PEER_CERT is
+        // intentionally absent for the optional-client-certificate case.
+        SSL_CTX_set_verify(ctx.get(),
+                           SSL_VERIFY_PEER | (required ? SSL_VERIFY_FAIL_IF_NO_PEER_CERT : 0), nullptr);
+        auto ssl = std::unique_ptr<SSL, decltype(&SSL_free)>(SSL_new(ctx.get()), SSL_free);
+        QVERIFY(ssl);
+        BIO *input = BIO_new(BIO_s_mem()), *output = BIO_new(BIO_s_mem());
+        QVERIFY(input && output);
+        BIO_set_mem_eof_return(input, -1);
+        SSL_set_bio(ssl.get(), input, output); // SSL owns both BIOs.
+        SSL_set_accept_state(ssl.get());
+
+        const int derLength = i2d_X509(cert.get(), nullptr);
+        QVERIFY(derLength > 0);
+        QByteArray der(derLength, 0);
+        auto *derCursor = reinterpret_cast<unsigned char *>(der.data());
+        QCOMPARE(i2d_X509(cert.get(), &derCursor), derLength);
+        auto *provider = QCA::findProvider(Provider);
+        QVERIFY(provider);
+        auto native = std::unique_ptr<QCA::TLSContext>(
+            static_cast<QCA::TLSContext *>(provider->createContext(QStringLiteral("tls"))));
+        QVERIFY(native);
+        native->setup(false, QStringLiteral("qca.test"), false);
+        QCA::CertificateCollection trust;
+        trust.addCertificate(QCA::Certificate::fromDER(der, nullptr, Provider));
+        native->setTrustedCertificates(trust);
+        native->start();
+        QVERIFY(native->waitForResultsReady(1000));
+        QCOMPARE(native->result(), QCA::TLSContext::Success);
+        native->update({}, {});
+        native->waitForResultsReady(1000);
+        bool rejected = false;
+        for (int round = 0; round < 50; ++round) {
+            const auto outgoing = native->to_net();
+            if (!outgoing.isEmpty())
+                QCOMPARE(BIO_write(SSL_get_rbio(ssl.get()), outgoing.constData(), outgoing.size()), outgoing.size());
+            if (!rejected && !SSL_is_init_finished(ssl.get())) {
+                const int status = SSL_do_handshake(ssl.get());
+                if (status <= 0) {
+                    const int error = SSL_get_error(ssl.get(), status);
+                    rejected = error != SSL_ERROR_WANT_READ && error != SSL_ERROR_WANT_WRITE;
+                }
+            }
+            QByteArray reply;
+            while (BIO_ctrl_pending(SSL_get_wbio(ssl.get())) > 0) {
+                char bytes[4096];
+                const int count = BIO_read(SSL_get_wbio(ssl.get()), bytes, sizeof(bytes));
+                QVERIFY(count > 0);
+                reply.append(bytes, count);
+            }
+            for (int offset = 0; offset < reply.size(); offset += 7) {
+                native->update(reply.mid(offset, 7), {});
+                native->waitForResultsReady(1000);
+                if (native->result() == QCA::TLSContext::Error)
+                    break;
+            }
+            if (rejected || native->result() == QCA::TLSContext::Error ||
+                (SSL_is_init_finished(ssl.get()) && native->result() == QCA::TLSContext::Success))
+                break;
+        }
+        if (required) {
+            // A server requiring a client certificate must not establish
+            // application data, regardless of which peer rejects first.
+            QVERIFY(rejected || native->result() == QCA::TLSContext::Error);
+            QVERIFY(!SSL_is_init_finished(ssl.get()));
+            continue;
+        }
+        QVERIFY(!rejected);
+        QVERIFY(SSL_is_init_finished(ssl.get()));
+        QCOMPARE(native->result(), QCA::TLSContext::Success);
+        QCOMPARE(native->peerCertificateValidity(), QCA::ValidityGood);
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+        auto peerCertificate = std::unique_ptr<X509, decltype(&X509_free)>(
+            SSL_get1_peer_certificate(ssl.get()), X509_free);
+#else
+        auto peerCertificate = std::unique_ptr<X509, decltype(&X509_free)>(
+            SSL_get_peer_certificate(ssl.get()), X509_free);
+#endif
+        QVERIFY(!peerCertificate); // No Windows user certificate may be sent.
+        const QByteArray application("authenticated and encrypted application data");
+        native->update({}, application);
+        QVERIFY(native->waitForResultsReady(1000));
+        QCOMPARE(native->result(), QCA::TLSContext::Success);
+        const auto record = native->to_net();
+        QCOMPARE(BIO_write(SSL_get_rbio(ssl.get()), record.constData(), record.size()), record.size());
+        char decrypted[128] = {};
+        const int read = SSL_read(ssl.get(), decrypted, sizeof(decrypted));
+        QCOMPARE(read, application.size());
+        QCOMPARE(QByteArray(decrypted, read), application);
+    }
+}
+
 void WinCryptoOpenSSLTest::interoperability_data()
 {
     QTest::addColumn<bool>("nativeServer");

@@ -978,6 +978,7 @@ private:
         _exporter.clear();
         secureWipe(_deferred);
         _postHandshake = false;
+        _noClientCertificateRetry = false;
     }
     void startDatagram()
     {
@@ -1334,7 +1335,8 @@ private:
             const auto    host     = QUrl::toAce(_host);
             const auto    wideHost = QString::fromLatin1(host);
             const DWORD   request  = ISC_REQ_SEQUENCE_DETECT | ISC_REQ_REPLAY_DETECT | ISC_REQ_CONFIDENTIALITY |
-                ISC_REQ_EXTENDED_ERROR | ISC_REQ_ALLOCATE_MEMORY | ISC_REQ_STREAM | ISC_REQ_MANUAL_CRED_VALIDATION;
+                ISC_REQ_EXTENDED_ERROR | ISC_REQ_ALLOCATE_MEMORY | ISC_REQ_STREAM | ISC_REQ_MANUAL_CRED_VALIDATION |
+                (_noClientCertificateRetry ? ISC_REQ_USE_SUPPLIED_CREDS : 0);
             const auto status = InitializeSecurityContextW(
                 &_cred,
                 _haveCtx ? &_ctx : nullptr,
@@ -1357,7 +1359,20 @@ private:
                 _haveCtx = true;
             if (status == SEC_E_INCOMPLETE_MESSAGE)
                 return;
+            if (status == SEC_I_INCOMPLETE_CREDENTIALS && !_noClientCertificateRetry && !_input.isEmpty()) {
+                // A server may request a client certificate without requiring one.
+                // Retry the same unconsumed server flight at most once, with
+                // explicit credentials only. SCH_CRED_NO_DEFAULT_CREDS prevents
+                // selecting a certificate from the Windows user store.
+                _noClientCertificateRetry = true;
+                qInfo("qca-wincrypto: Schannel requested client credentials (0x%08lx); retrying without "
+                      "a client certificate",
+                      static_cast<unsigned long>(status));
+                continue;
+            }
             if (status != SEC_E_OK && status != SEC_I_CONTINUE_NEEDED) {
+                qWarning("qca-wincrypto: Schannel stream TLS handshake failed (0x%08lx)",
+                         static_cast<unsigned long>(status));
                 _result = Error;
                 return;
             }
@@ -1556,7 +1571,7 @@ private:
     SecPkgContext_StreamSizes _sizes {};
     bool                      _haveCred = false, _haveCtx = false, _configured = false, _server = false;
     bool                      _handshaken = false, _eof = false, _closing = false;
-    bool                      _postHandshake = false;
+    bool                      _postHandshake = false, _noClientCertificateRetry = false;
     int                       _minSSF = 0, _maxSSF = 256, _encoded = 0;
     QString                   _host;
     QStringList               _suites;
