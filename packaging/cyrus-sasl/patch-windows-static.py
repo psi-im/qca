@@ -22,7 +22,7 @@ replace_once(
     '!IF "$(STATIC_BUNDLE)" == "1"\n'
     'static_plugin_objs = plain.obj scram.obj\n'
     'libsasl_out = libsasl2-static.lib\n'
-    'STATIC_PLUGIN_FLAGS = /D "STATIC_PLAIN" /D "STATIC_SCRAM" /D "HAVE_SHA512=1"\n'
+    'STATIC_PLUGIN_FLAGS = /D "STATIC_PLAIN" /D "STATIC_SCRAM" /D "HAVE_SHA512=1" /D "SASL_STATIC_ONLY"\n'
     '!ELSE\n'
     'static_plugin_objs =\n'
     'libsasl_out = libsasl.dll libsasl.exp libsasl.lib $(libsasl_res)\n'
@@ -97,4 +97,49 @@ replace_once(
     '<<\n'
 )
 
-print(f'Patched {libmk}')
+# The Windows loader otherwise scans registry-configured directories even when
+# all mechanisms are embedded. Keep that behavior for ordinary Cyrus builds.
+loader = root / 'lib' / 'windlopen.c'
+replace_once(
+    loader,
+    '    int result;\n'
+    '    TCHAR cur_dir[PATH_MAX], full_name[PATH_MAX+2], prefix[PATH_MAX+2];\n',
+    '    int result;\n'
+    '    const add_plugin_list_t *cur_ep;\n'
+    '#ifndef SASL_STATIC_ONLY\n'
+    '    TCHAR cur_dir[PATH_MAX], full_name[PATH_MAX+2], prefix[PATH_MAX+2];\n'
+)
+replace_once(
+    loader,
+    '    int position;\n'
+    '    const add_plugin_list_t *cur_ep;\n',
+    '    int position;\n'
+)
+replace_once(
+    loader,
+    '    size_t prefix_len;\n',
+    '    size_t prefix_len;\n'
+    '#endif\n'
+)
+replace_once(
+    loader,
+    '    /* get the path to the plugins */\n',
+    '#ifdef SASL_STATIC_ONLY\n'
+    '    return SASL_OK;\n'
+    '#else\n'
+    '    /* get the path to the plugins */\n'
+)
+replace_once(
+    loader,
+    '    return retCode;\n'
+    '}\n\n'
+    'int\n'
+    '_sasl_done_with_plugins(void)\n',
+    '    return retCode;\n'
+    '#endif\n'
+    '}\n\n'
+    'int\n'
+    '_sasl_done_with_plugins(void)\n'
+)
+
+print(f'Patched {libmk} and {loader}')

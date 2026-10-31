@@ -8,8 +8,8 @@ on:
 
 env:
   CYRUS_VERSION: 2.1.28
-  CYRUS_REVISION: r6
-  CYRUS_TAG: deps-cyrus-sasl-2.1.28-r6
+  CYRUS_REVISION: r7
+  CYRUS_TAG: deps-cyrus-sasl-2.1.28-r7
   ANDROID_NDK_VERSION: r27c
   ANDROID_API: 28
 
