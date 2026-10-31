@@ -197,6 +197,12 @@ jobs:
           -DBUILD_WITH_QT6=ON -DBUILD_SHARED_LIBS=${{ matrix.shared }}
           "-DBUILD_PLUGINS=wincrypto;wingss" -DBUILD_TESTS=ON -DBUILD_TOOLS=OFF
           -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE
+      - name: Verify WinCrypto OpenSSL tests stay disabled without OpenSSL
+        shell: pwsh
+        run: |
+          if (-not (Select-String -Path native-build/CMakeCache.txt -Pattern '^WINCRYPTO_TEST_OPENSSL_INTEROP:BOOL=OFF$' -Quiet)) {
+            throw "Native-only QCA must not enable OpenSSL interop tests"
+          }
       - name: Build and exercise native crypto and TLS
         shell: pwsh
         env:
@@ -205,6 +211,11 @@ jobs:
           cmake --build native-build --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ctest --test-dir native-build --output-on-failure --timeout 60 -R '^(WinCrypto.*|WinGss\..*|DTLSSRTP|Hashing|SymmetricCipher|MessageAuthenticationCode|KeyDerivationFunction|SaslScram|SaslChannelBinding|SecureFile\..*)$'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # CTest hides the status logged by a successful handshake test.
+          # Run this fixture directly to retain the Schannel status in CI.
+          $env:QCA_PLUGIN_PATH = "$pwd/native-build/lib/qca3-qt6"
+          & "$pwd/native-build/bin/wincryptotlsunittest.exe" optionalClientCertificateRequest
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --install native-build
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -252,10 +263,23 @@ jobs:
             -DBUILD_TESTS=ON \
             -DBUILD_TOOLS=OFF \
             -DBUILD_PLUGINS='ossl;wincrypto;wingss' \
-            -DWINCRYPTO_TEST_OPENSSL_INTEROP=ON \
             -DLOAD_SHARED_PLUGINS=ON \
             -DQCA_SUFFIX=qt5 \
             -DUSE_RELATIVE_PATHS=ON
+      - name: Check automatic WinCrypto OpenSSL interop and explicit override
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          # Without explicit ON, an installed OpenSSL enables interop tests.
+          grep -Fxq 'WINCRYPTO_TEST_OPENSSL_INTEROP:BOOL=ON' build/CMakeCache.txt
+          grep -q 'WinCryptoOpenSSL' build/unittest/wincryptounittest/CTestTestfile.cmake
+          # Explicit OFF wins even though the OpenSSL SDK is installed.
+          cmake -S . -B build-no-interop -G Ninja \
+            -DBUILD_WITH_QT6=OFF -DBUILD_TESTS=ON -DBUILD_TOOLS=OFF \
+            '-DBUILD_PLUGINS=wincrypto;wingss' \
+            -DWINCRYPTO_TEST_OPENSSL_INTEROP=OFF
+          grep -Fxq 'WINCRYPTO_TEST_OPENSSL_INTEROP:BOOL=OFF' build-no-interop/CMakeCache.txt
+          ! grep -q 'WinCryptoOpenSSL' build-no-interop/unittest/wincryptounittest/CTestTestfile.cmake
       - name: Build and test QCA3 Qt5
         shell: msys2 {0}
         run: |
