@@ -33,7 +33,7 @@
 #ifndef SECURITY_WIN32
 #define SECURITY_WIN32
 #endif
-#include <Security.h>
+#include <security.h>
 
 namespace wingssQCAPlugin {
 
