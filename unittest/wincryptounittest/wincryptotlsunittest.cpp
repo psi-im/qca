@@ -138,6 +138,18 @@ public:
         return _cert ? QByteArray(reinterpret_cast<const char *>(_cert->pbCertEncoded), int(_cert->cbCertEncoded))
                      : QByteArray();
     }
+    QByteArray peerCertificateDer() const
+    {
+        if (!_haveCtx || !complete)
+            return {};
+        PCCERT_CONTEXT cert = nullptr;
+        if (QueryContextAttributesW(const_cast<CtxtHandle *>(&_ctx), SECPKG_ATTR_REMOTE_CERT_CONTEXT,
+                                    &cert) != SEC_E_OK || !cert)
+            return {};
+        const QByteArray der(reinterpret_cast<const char *>(cert->pbCertEncoded), int(cert->cbCertEncoded));
+        CertFreeCertificateContext(cert);
+        return der;
+    }
     QByteArray step(const QByteArray &input)
     {
         _input += input;
@@ -273,6 +285,7 @@ private Q_SLOTS:
     void clientTLS_data();
     void clientTLS();
     void optionalClientCertificateRequest();
+    void explicitClientCertificate();
     void publicTLS();
     void publicTLS_data();
     void unsupportedConfiguration();
@@ -588,6 +601,76 @@ void WinCryptoTLSTest::optionalClientCertificateRequest()
     const QByteArray message("secure data after optional client certificate request");
     client->update({}, message);
     client->waitForResultsReady(1000);
+    QCOMPARE(client->result(), QCA::TLSContext::Success);
+    QCOMPARE(server.decrypt(client->to_net()), message);
+}
+
+void WinCryptoTLSTest::explicitClientCertificate()
+{
+    QCA::KeyGenerator generator;
+    const auto key = generator.createRSA(2048, 65537, ProviderName);
+    QVERIFY(!key.isNull());
+    QCA::CertificateOptions options;
+    QCA::CertificateInfo subject;
+    subject.insert(QCA::CommonName, QStringLiteral("client.qca.test"));
+    options.setInfo(subject);
+    options.setSerialNumber(QCA::BigInteger(123458));
+    const auto now = QDateTime::currentDateTimeUtc();
+    options.setValidityPeriod(now.addSecs(-60), now.addDays(1));
+    options.setConstraints({QCA::DigitalSignature, QCA::ClientAuth});
+    const QCA::Certificate cert(options, key, ProviderName);
+    QVERIFY(!cert.isNull());
+    QCA::CertificateChain chain;
+    chain += cert;
+
+    // Never accept malformed explicit credentials by falling back to no
+    // certificate, even when the server would otherwise allow anonymous TLS.
+    auto invalid = context();
+    QVERIFY(invalid);
+    invalid->setup(false, QStringLiteral("qca.test"), false);
+    invalid->setCertificate(chain, generator.createRSA(2048, 65537, ProviderName));
+    invalid->start();
+    QVERIFY(invalid->waitForResultsReady(1000));
+    QCOMPARE(invalid->result(), QCA::TLSContext::Error);
+    auto incomplete = context();
+    QVERIFY(incomplete);
+    incomplete->setup(false, QStringLiteral("qca.test"), false);
+    incomplete->setCertificate(chain, {});
+    incomplete->start();
+    QVERIFY(incomplete->waitForResultsReady(1000));
+    QCOMPARE(incomplete->result(), QCA::TLSContext::Error);
+
+    NativeServer server(false, false, false, true);
+    QVERIFY(server.valid());
+    auto client = context();
+    QVERIFY(client);
+    client->setup(false, QStringLiteral("qca.test"), false);
+    QCA::CertificateCollection trust;
+    trust.addCertificate(QCA::Certificate::fromDER(server.der(), nullptr, ProviderName));
+    client->setTrustedCertificates(trust);
+    client->setCertificate(chain, key);
+    client->start();
+    QVERIFY(client->waitForResultsReady(1000));
+    QCOMPARE(client->result(), QCA::TLSContext::Success);
+    client->update({}, {});
+    client->waitForResultsReady(1000);
+    for (int round = 0; round < 20 && (!server.complete || client->result() != QCA::TLSContext::Success); ++round) {
+        const auto outgoing = client->to_net();
+        const auto reply = server.step(outgoing);
+        QVERIFY(!server.failed);
+        for (int offset = 0; offset < reply.size(); offset += 7) {
+            client->update(reply.mid(offset, 7), {});
+            client->waitForResultsReady(1000);
+            QVERIFY(client->result() != QCA::TLSContext::Error);
+        }
+    }
+    QVERIFY(server.complete);
+    QCOMPARE(client->result(), QCA::TLSContext::Success);
+    QCOMPARE(client->peerCertificateValidity(), QCA::ValidityGood);
+    QCOMPARE(server.peerCertificateDer(), cert.toDER());
+    const QByteArray message("mutually authenticated stream TLS data");
+    client->update({}, message);
+    QVERIFY(client->waitForResultsReady(1000));
     QCOMPARE(client->result(), QCA::TLSContext::Success);
     QCOMPARE(server.decrypt(client->to_net()), message);
 }
