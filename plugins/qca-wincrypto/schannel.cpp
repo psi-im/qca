@@ -651,13 +651,10 @@ public:
     }
     void setCertificate(const CertificateChain &cert, const PrivateKey &key) override
     {
-        // DTLS identities use the native RSA bridge. Stream TLS identities
-        // remain unsupported; reject them rather than silently dropping them.
-        if (_datagram) {
-            _localCertificate = cert;
-            _localKey         = key;
-        } else if (!cert.isEmpty() || !key.isNull())
-            _configured = false;
+        // Only explicitly supplied identities may be offered to Schannel.
+        // Native key conversion validates that the leaf certificate matches.
+        _localCertificate = cert;
+        _localKey         = key;
     }
     void setSessionId(const TLSSessionContext &) override
     {
@@ -679,11 +676,22 @@ public:
             return;
         }
         if (_configured && !_server && _minSSF <= _maxSSF && _maxSSF >= 128) {
+            // Reject incomplete or mismatched identities. An invalid explicit
+            // certificate must never silently degrade to anonymous TLS.
+            if (_localCertificate.isEmpty() != _localKey.isNull())
+                return;
+            auto identity = _localCertificate.isEmpty()
+                ? nullptr : createCredentialCertificate(_localCertificate, _localKey);
+            if (!_localCertificate.isEmpty() && !identity)
+                return;
+            PCCERT_CONTEXT certificate = identity ? identity->certificate : nullptr;
             TLS_PARAMETERS params {};
             params.grbitDisabledProtocols = SP_PROT_SSL2 | SP_PROT_SSL3 | SP_PROT_TLS1 | SP_PROT_TLS1_1;
             SCH_CREDENTIALS creds {};
             creds.dwVersion      = SCH_CREDENTIALS_VERSION;
             creds.dwFlags        = SCH_CRED_NO_DEFAULT_CREDS | SCH_CRED_MANUAL_CRED_VALIDATION | SCH_USE_STRONG_CRYPTO;
+            creds.cCreds         = certificate ? 1 : 0;
+            creds.paCred         = certificate ? &certificate : nullptr;
             creds.cTlsParameters = 1;
             creds.pTlsParameters = &params;
             TimeStamp  expiry;
@@ -696,7 +704,7 @@ public:
                                                           nullptr,
                                                           &_cred,
                                                           &expiry);
-            _haveCred         = status == SEC_E_OK;
+            _haveCred = status == SEC_E_OK;
             if (status == SEC_E_UNKNOWN_CREDENTIALS || status == SEC_E_UNSUPPORTED_FUNCTION) {
                 // Early Windows 10 lacks SCH_CREDENTIALS. Its legacy API can
                 // still provide TLS 1.2 without enabling older protocols.
@@ -704,17 +712,25 @@ public:
                 legacy.dwVersion               = SCHANNEL_CRED_VERSION;
                 legacy.grbitEnabledProtocols   = SP_PROT_TLS1_2_CLIENT;
                 legacy.dwFlags                 = creds.dwFlags;
+                legacy.cCreds                  = creds.cCreds;
+                legacy.paCred                  = creds.paCred;
                 legacy.dwMinimumCipherStrength = ULONG(std::max(128, _minSSF));
                 legacy.dwMaximumCipherStrength = ULONG(_maxSSF);
-                _haveCred                      = AcquireCredentialsHandleW(nullptr,
-                                                                           const_cast<wchar_t *>(UNISP_NAME_W),
-                                                                           SECPKG_CRED_OUTBOUND,
-                                                                           nullptr,
-                                                                           &legacy,
-                                                                           nullptr,
-                                                                           nullptr,
-                                                                           &_cred,
-                                                                           &expiry) == SEC_E_OK;
+                _haveCred = AcquireCredentialsHandleW(nullptr,
+                                                      const_cast<wchar_t *>(UNISP_NAME_W),
+                                                      SECPKG_CRED_OUTBOUND,
+                                                      nullptr,
+                                                      &legacy,
+                                                      nullptr,
+                                                      nullptr,
+                                                      &_cred,
+                                                      &expiry) == SEC_E_OK;
+            }
+            // Schannel has opened its own key reference. Remove only the
+            // temporary persisted bridge key, never the original QCA key.
+            if (identity && !identity->removeTemporaryKey()) {
+                release();
+                return;
             }
             if (_haveCred)
                 _result = Success;
