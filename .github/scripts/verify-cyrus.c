@@ -5,9 +5,12 @@
 #include <stdio.h>
 #include <string.h>
 
+static unsigned int getpath_calls;
+
 static int getpath(void *context, const char **path)
 {
     (void)context;
+    ++getpath_calls;
     *path = "__qca_no_dynamic_sasl_plugins__";
     return SASL_OK;
 }
@@ -50,6 +53,21 @@ int main(void)
         return 10;
     }
 
+    rc = sasl_server_init(callbacks, "qca");
+    if (rc != SASL_OK) {
+        fprintf(stderr, "sasl_server_init failed: %d\n", rc);
+        sasl_done();
+        return 12;
+    }
+
+#ifdef _WIN32
+    /* Static Windows bundles must not consult host plugin paths or the registry. */
+    if (getpath_calls != 0) {
+        fprintf(stderr, "static SASL unexpectedly requested a dynamic plugin path\n");
+        failed = 1;
+    }
+#endif
+
     mechanisms = sasl_global_listmech();
     if (mechanisms == NULL) {
         fprintf(stderr, "sasl_global_listmech failed\n");
@@ -78,6 +96,6 @@ int main(void)
         return 1;
     }
 
-    puts("Cyrus SASL static mechanisms verified");
+    puts("Cyrus SASL static initialization and mechanisms verified");
     return 0;
 }

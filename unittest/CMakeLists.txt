@@ -48,6 +48,9 @@ endif()
 if(WITH_wincrypto_PLUGIN_INTERNAL)
   add_subdirectory(wincryptounittest)
 endif()
+if(WITH_wingss_PLUGIN_INTERNAL)
+  add_subdirectory(wingss)
+endif()
 
 #Tests that require OpenSSL
 #Remove once we stop supporting openssl < 1.1.1i

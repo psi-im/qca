@@ -17,8 +17,8 @@ on:
 
 env:
   CYRUS_VERSION: 2.1.28
-  CYRUS_REVISION: r6
-  CYRUS_TAG: deps-cyrus-sasl-2.1.28-r6
+  CYRUS_REVISION: r7
+  CYRUS_TAG: deps-cyrus-sasl-2.1.28-r7
   ANDROID_NDK_VERSION: r27c
   ANDROID_API: 28
 
@@ -128,7 +128,7 @@ jobs:
             -DBUILD_SHARED_LIBS=ON \
             -DBUILD_TESTS=ON \
             -DBUILD_TOOLS=OFF \
-            -DBUILD_PLUGINS=ossl \
+            -DBUILD_PLUGINS='ossl;wingss' \
             -DLOAD_SHARED_PLUGINS=ON \
             -DQCA_SUFFIX=qt5 \
             -DUSE_RELATIVE_PATHS=ON
@@ -143,6 +143,7 @@ jobs:
           test -f sdk/include/Qca3-qt5/QtCrypto/qca_securefile.h
           test -n "$(find sdk/bin -type f -iname '*qca3-qt5*.dll' -print -quit)"
           test -n "$(find sdk -type f -iname '*qca-ossl*.dll' -print -quit)"
+          test -n "$(find sdk -type f -iname '*qca-wingss*.dll' -print -quit)"
       - name: Verify relocated QCA3 Qt5 SDK consumer
         shell: msys2 {0}
         run: |
@@ -220,6 +221,9 @@ jobs:
         run: |
           test -n "$(find sdk -type f \( -name '*qca-ossl*' -o -name '*qca-ossl*.dylib' \) -print -quit)"
           test -n "$(find sdk -type f \( -name '*qca-cyrus-sasl*' -o -name '*qca-cyrus-sasl*.dylib' \) -print -quit)"
+          if [ "$RUNNER_OS" = Windows ]; then
+            test -n "$(find sdk -type f -iname '*qca-wingss*.dll' -print -quit)"
+          fi
       - name: Verify Cyrus SASL is not a desktop runtime dependency
         if: runner.os == 'macOS'
         shell: bash
