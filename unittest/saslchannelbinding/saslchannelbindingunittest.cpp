@@ -121,15 +121,27 @@ void SaslChannelBindingUnitTest::completeClient_data()
     QTest::addColumn<QString>("mechanism");
     QTest::addColumn<bool>("lateParams");
     QTest::addColumn<bool>("badSignature");
-    QTest::newRow("sha1-plus") << QStringLiteral("sha1") << QStringLiteral("SCRAM-SHA-1-PLUS") << false << false;
-    QTest::newRow("sha224-plus") << QStringLiteral("sha224") << QStringLiteral("SCRAM-SHA-224-PLUS") << false << false;
-    QTest::newRow("sha256-plus") << QStringLiteral("sha256") << QStringLiteral("SCRAM-SHA-256-PLUS") << false << false;
-    QTest::newRow("sha384-plus") << QStringLiteral("sha384") << QStringLiteral("SCRAM-SHA-384-PLUS") << false << false;
-    QTest::newRow("sha512-plus") << QStringLiteral("sha512") << QStringLiteral("SCRAM-SHA-512-PLUS") << false << false;
-    QTest::newRow("sha256-plus-interactive")
-        << QStringLiteral("sha256") << QStringLiteral("SCRAM-SHA-256-PLUS") << true << false;
-    QTest::newRow("sha256-plus-bad-signature")
-        << QStringLiteral("sha256") << QStringLiteral("SCRAM-SHA-256-PLUS") << false << true;
+    QTest::addColumn<QString>("provider");
+    QStringList providers {QStringLiteral("qca-cyrus-sasl")};
+#ifdef Q_OS_WIN
+    providers += QStringLiteral("qca-wingss");
+#endif
+    for (const QString &provider : providers) {
+        const QByteArray prefix = provider == QStringLiteral("qca-wingss") ? QByteArray("wingss-") : QByteArray();
+        const auto       row =
+            [&](const char *name, const char *hash, const char *mechanism, bool late = false, bool bad = false) {
+                const QByteArray rowName = prefix + name;
+                QTest::newRow(rowName.constData())
+                    << QString::fromLatin1(hash) << QString::fromLatin1(mechanism) << late << bad << provider;
+            };
+        row("sha1-plus", "sha1", "SCRAM-SHA-1-PLUS");
+        row("sha224-plus", "sha224", "SCRAM-SHA-224-PLUS");
+        row("sha256-plus", "sha256", "SCRAM-SHA-256-PLUS");
+        row("sha384-plus", "sha384", "SCRAM-SHA-384-PLUS");
+        row("sha512-plus", "sha512", "SCRAM-SHA-512-PLUS");
+        row("sha256-plus-interactive", "sha256", "SCRAM-SHA-256-PLUS", true);
+        row("sha256-plus-bad-signature", "sha256", "SCRAM-SHA-256-PLUS", false, true);
+    }
 }
 
 void SaslChannelBindingUnitTest::completeClient()
@@ -138,10 +150,10 @@ void SaslChannelBindingUnitTest::completeClient()
     QFETCH(QString, mechanism);
     QFETCH(bool, lateParams);
     QFETCH(bool, badSignature);
+    QFETCH(QString, provider);
 
-    const QString provider = QStringLiteral("qca-cyrus-sasl");
     if (!QCA::isSupported("sasl", provider))
-        QSKIP("qca-cyrus-sasl is not available");
+        QSKIP("The selected SASL provider is not available");
     const QString macName = QStringLiteral("hmac(%1)").arg(hash);
     if (!QCA::isSupported(QStringList {hash, macName, QStringLiteral("pbkdf2(%1)").arg(hash)}))
         QSKIP("The reference hash, HMAC and PBKDF2 operations are unavailable");
@@ -163,11 +175,14 @@ void SaslChannelBindingUnitTest::completeClient()
     else
         credentials();
 
-    QSignalSpy started(&sasl, &QCA::SASL::clientStarted);
-    QSignalSpy steps(&sasl, &QCA::SASL::nextStep);
-    QSignalSpy authenticated(&sasl, &QCA::SASL::authenticated);
-    QSignalSpy errors(&sasl, &QCA::SASL::error);
-    sasl.startClient(QStringLiteral("test"), QStringLiteral("example.test"), QStringList {mechanism});
+    QSignalSpy  started(&sasl, &QCA::SASL::clientStarted);
+    QSignalSpy  steps(&sasl, &QCA::SASL::nextStep);
+    QSignalSpy  authenticated(&sasl, &QCA::SASL::authenticated);
+    QSignalSpy  errors(&sasl, &QCA::SASL::error);
+    QStringList offered {mechanism};
+    if (provider == QStringLiteral("qca-wingss"))
+        offered.prepend(QStringLiteral("GSSAPI"));
+    sasl.startClient(QStringLiteral("test"), QStringLiteral("example.test"), offered);
     QTRY_VERIFY_WITH_TIMEOUT(!started.isEmpty() || !errors.isEmpty(), 5000);
     QVERIFY2(errors.isEmpty(), "Unable to start the SCRAM client");
     QCOMPARE(sasl.mechanism(), mechanism);
