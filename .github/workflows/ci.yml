@@ -206,6 +206,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ctest --test-dir native-build --output-on-failure --timeout 60 -R '^(WinCrypto.*|WinGss\..*|DTLSSRTP|Hashing|SymmetricCipher|MessageAuthenticationCode|KeyDerivationFunction|SaslScram|SaslChannelBinding|SecureFile\..*)$'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # CTest hides the status logged by a successful handshake test.
+          # Run this fixture directly to retain the Schannel status in CI.
+          $env:QCA_PLUGIN_PATH = "$pwd/native-build/lib/qca3-qt6"
+          & "$pwd/native-build/bin/wincryptotlsunittest.exe" optionalClientCertificateRequest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --install native-build
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
