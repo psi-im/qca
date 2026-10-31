@@ -36,8 +36,9 @@ cannot select that native path or silently discard the binding.
 Automated tests cover provider loading, delegation, complete SCRAM-PLUS exchanges
 when a compatible delegate is available, SSPI buffer ownership and handle cleanup,
 fragmented records, size limits and large streams. SSPI session tests use a fake
-function table and require no domain credentials; they do not replace testing
-Kerberos interoperability against a configured domain.
+function table and require no domain credentials. A separate test loads the
+actual system library and enumerates its security packages. These checks do
+not replace testing Kerberos interoperability against a configured domain.
 
 Installing
 ----------

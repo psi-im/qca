@@ -26,7 +26,7 @@
 #include <QMutex>
 #include <QString>
 #include <QtEndian>
-#include <limits>
+#include <climits>
 #include <memory>
 
 #include <windows.h>
@@ -500,6 +500,8 @@ public:
         out->clear();
         if (!initialized)
             return ErrorInitialize;
+        if (quint64(in.size()) > maxtok)
+            return ErrorInitialize;
         if (authed && !first_step) {
             out->clear();
             *authenticated = true;
@@ -623,7 +625,6 @@ public:
     {
         if (!ensure_sizes_cached())
             return ErrorQueryContext;
-
         const quint64 overhead = quint64(ctx_sizes.cbSecurityTrailer) + ctx_sizes.cbBlockSize;
         if (maxTokenSize <= 0 || overhead >= quint64(maxTokenSize))
             return ErrorQueryContext;
@@ -639,6 +640,8 @@ public:
             return ErrorEncrypt;
         if (!ensure_sizes_cached())
             return ErrorQueryContext;
+        if (quint64(ctx_sizes.cbSecurityTrailer) + ctx_sizes.cbBlockSize + quint64(in.size()) > INT_MAX)
+            return ErrorEncrypt;
 
         QByteArray tokenbuf(ctx_sizes.cbSecurityTrailer, 0);
         QByteArray padbuf(ctx_sizes.cbBlockSize, 0);
@@ -683,7 +686,7 @@ public:
     ReturnCode decode(const QByteArray &in, QByteArray *out, bool *encrypted)
     {
         out->clear();
-        if (quint64(in.size()) > std::numeric_limits<ULONG>::max())
+        if (quint64(in.size()) > INT_MAX)
             return ErrorDecrypt;
         // DecryptMessage modifies the stream buffer and returns a view into it.
         QByteArray storage = in;
@@ -1061,6 +1064,7 @@ public:
             const quint32 length = qFromBigEndian<quint32>(inbuf.constData());
             if (length == 0 || length > quint32(max_dec_size)) {
                 inbuf.clear();
+                authed = false;
                 return ErrorDecodeTooLarge;
             }
             const int needed = int(length) + 4 - int(inbuf.size());
@@ -1075,10 +1079,14 @@ public:
             bool             encrypted = false;
             const auto       result    = sess.decode(token, &plaintext, &encrypted);
             inbuf.clear();
-            if (result != KerberosSession::Success)
+            if (result != KerberosSession::Success) {
+                authed = false;
                 return ErrorDecode;
-            if (do_conf && !encrypted)
+            }
+            if (do_conf && !encrypted) {
+                authed = false;
                 return ErrorDecodeNotEncrypted;
+            }
             total_out += plaintext;
         }
         *out = total_out;

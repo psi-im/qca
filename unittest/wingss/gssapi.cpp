@@ -203,6 +203,32 @@ private Q_SLOTS:
         QCOMPARE(fake.credentialsFreed, 1);
     }
 
+    void nativeLibraryAndPackageList()
+    {
+        struct ReleaseLibrary
+        {
+            ~ReleaseLibrary()
+            {
+                while (sspi_users)
+                    sspi_unload();
+            }
+        } release;
+        QVERIFY(sspi_load());
+        const auto table = sspi.W;
+        QVERIFY(sspi_load());
+        QCOMPARE(sspi.W, table);
+        const auto packages = sspi_get_packagelist();
+        bool       kerberos = false;
+        for (const auto &package : packages)
+            kerberos |= package.name == QStringLiteral("Kerberos");
+        QVERIFY(kerberos);
+        sspi_unload();
+        QVERIFY(sspi_lib);
+        sspi_unload();
+        QVERIFY(!sspi_lib);
+        QVERIFY(!sspi_packagelist);
+    }
+
     void failureReleasesOutputAndHandles()
     {
         fake.failInitialize = true;
@@ -275,6 +301,7 @@ private Q_SLOTS:
         fake.encrypted = false;
         QCOMPARE(session.decode(wire, &output), SaslGssapiSession::ErrorDecodeNotEncrypted);
         QVERIFY(output.isEmpty());
+        QCOMPARE(session.encode("more data", &output), SaslGssapiSession::ErrorEncode);
     }
 
     void noSecurityLayer()

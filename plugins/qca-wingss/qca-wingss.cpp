@@ -223,7 +223,7 @@ public:
 
     virtual void update(const QByteArray &from_net, const QByteArray &from_app)
     {
-        if (!sess || !authed) {
+        if (!sess || !authed || from_app.size() > INT_MAX - enc) {
             _result        = Error;
             _authCondition = SASL::AuthFail;
             resultsReadyTrigger.start();
