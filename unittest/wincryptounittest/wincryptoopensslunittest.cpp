@@ -417,7 +417,9 @@ void WinCryptoOpenSSLTest::streamClientCertificateRequest()
                 break;
         }
         if (required) {
-            QVERIFY(rejected);
+            // A server requiring a client certificate must not establish
+            // application data, regardless of which peer rejects first.
+            QVERIFY(rejected || native->result() == QCA::TLSContext::Error);
             QVERIFY(!SSL_is_init_finished(ssl.get()));
             continue;
         }
@@ -425,6 +427,14 @@ void WinCryptoOpenSSLTest::streamClientCertificateRequest()
         QVERIFY(SSL_is_init_finished(ssl.get()));
         QCOMPARE(native->result(), QCA::TLSContext::Success);
         QCOMPARE(native->peerCertificateValidity(), QCA::ValidityGood);
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+        auto peerCertificate = std::unique_ptr<X509, decltype(&X509_free)>(
+            SSL_get1_peer_certificate(ssl.get()), X509_free);
+#else
+        auto peerCertificate = std::unique_ptr<X509, decltype(&X509_free)>(
+            SSL_get_peer_certificate(ssl.get()), X509_free);
+#endif
+        QVERIFY(!peerCertificate); // No Windows user certificate may be sent.
         const QByteArray application("authenticated and encrypted application data");
         native->update({}, application);
         QVERIFY(native->waitForResultsReady(1000));
