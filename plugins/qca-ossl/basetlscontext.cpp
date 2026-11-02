@@ -27,6 +27,7 @@
 #include "utils.h"
 
 #include <QDebug>
+#include <QTimer>
 #include <QUrl>
 
 #include <openssl/err.h>
@@ -447,7 +448,11 @@ CertificateChain BaseOsslTLSContext::peerCertificateChain() const
 
 void BaseOsslTLSContext::doResultsReady()
 {
-    QMetaObject::invokeMethod(this, "resultsReady", Qt::QueuedConnection);
+    const auto generation = resultsGeneration;
+    QTimer::singleShot(0, this, [this, generation] {
+        if (generation == resultsGeneration)
+            emit resultsReady();
+    });
 }
 
 int BaseOsslTLSContext::doConnect()
@@ -546,6 +551,9 @@ BIO *BaseOsslTLSContext::makeReadBIO()
 
 void BaseOsslTLSContext::reset()
 {
+    // A reset cancels the previous operation, including its queued completion.
+    // A stale completion must not consume a newly started TLS operation.
+    ++resultsGeneration;
     if (ssl) {
         SSL_free(ssl);
         ssl  = nullptr;
