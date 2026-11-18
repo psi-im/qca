@@ -896,12 +896,15 @@ bool BaseOsslTLSContext::applyConstraints()
     // Empty explicitly disables TLS 1.3 suites, preventing bypass of a legacy-only list.
     if (SSL_CTX_set_ciphersuites(context, modern.constData()) != 1)
         return false;
-    if (type() != QLatin1String("dtls")) {
-        if (modern.isEmpty() && SSL_CTX_set_max_proto_version(context, TLS1_2_VERSION) != 1)
-            return false;
-        if (legacy.isEmpty() && SSL_CTX_set_min_proto_version(context, TLS1_3_VERSION) != 1)
+    if (modern.isEmpty()) {
+        // DTLS 1.3 also needs modern suites; keep legacy-only constraints on 1.2.
+        const int maximumVersion = type() == QLatin1String("dtls") ? DTLS1_2_VERSION : TLS1_2_VERSION;
+        if (SSL_CTX_set_max_proto_version(context, maximumVersion) != 1)
             return false;
     }
+    if (type() != QLatin1String("dtls") && legacy.isEmpty()
+        && SSL_CTX_set_min_proto_version(context, TLS1_3_VERSION) != 1)
+        return false;
 #endif
     return true;
 }
