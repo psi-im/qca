@@ -13,11 +13,8 @@ configure_args=(
   --disable-shared
   --enable-plain
   --enable-scram
-  --disable-opaque
-  --disable-passdss
+  --without-opaque
   --disable-anon
-  --disable-otp
-  --disable-srp
   --disable-sample
   --disable-sql
   --disable-gssapi

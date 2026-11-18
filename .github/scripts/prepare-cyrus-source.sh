@@ -36,9 +36,10 @@ path = pathlib.Path(sys.argv[1]) / "lib/Makefile.am"
 text = path.read_text()
 old = "\t$(AR) cru $@ $(SASL_STATIC_OBJS)\n"
 new = "\t$(AR) cru .libs/$@ $(SASL_STATIC_OBJS)\n"
-if text.count(old) != 1:
-    raise SystemExit(f"{path}: expected exactly one static-archive recipe")
-path.write_text(text.replace(old, new))
+if text.count(old) == 1 and text.count(new) == 0:
+    path.write_text(text.replace(old, new))
+elif text.count(old) != 0 or text.count(new) != 1:
+    raise SystemExit(f"{path}: expected exactly one recognized static-archive recipe")
 PY
   (cd "$source_dir" && autoreconf -fiv)
 elif [[ -n "$mode" ]]; then

@@ -1046,7 +1046,7 @@ QByteArray createSelfSignedCertificate(const CertificateOptions &opts, const PKe
         return {};
     auto       serialSecure = opts.serialNumber().toArray();
     QByteArray serial(serialSecure.constData(), serialSecure.size());
-    while (serial.size() > 1 && serial[0] == 0)
+    while (serial.size() > 1 && serial[0] == '\0')
         serial.remove(0, 1);
     if (serial.size() > 20)
         return {};
